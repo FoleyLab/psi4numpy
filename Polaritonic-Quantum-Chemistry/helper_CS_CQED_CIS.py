@@ -257,7 +257,7 @@ def cs_cqed_cis(lambda_vector, omega_val, molecule_string, psi4_options_dict):
                                 Hep[ias, jbt] += (
                                     np.sqrt(t + 1)
                                     * np.sqrt(omega_val / 2)
-                                    * l_dot_mu_exp
+                                    * l_dot_mu_exp 
                                 )
                                 # l dot mu terms
                                 for k in range(0, ndocc):
