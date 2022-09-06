@@ -46,6 +46,13 @@ no_reorient
 symmetry c1
 """
 
+#h2o_string = """
+#O
+#H 1 1.1
+#H 1 1.1 2 104
+#symmetry c1
+#"""
+
 # energy for H2O from hilbert package described in [DePrince:2021:094112]
 expected_h2o_e = -76.016355284146
 

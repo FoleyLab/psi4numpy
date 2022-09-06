@@ -167,7 +167,7 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
 
     # Add Pauli-Fierz terms to H_core
     # Eq. (11) in [McTague:2021:ChemRxiv]
-    H = H_0 + Q_PF + d_PF
+    H = H_0 + Q_PF #=>> SEP6EDIT + d_PF
 
     # Overlap for DIIS
     S = mints.ao_overlap()
@@ -214,7 +214,12 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
 
         # Build fock matrix: [Szabo:1996] Eqn. 3.154, pp. 141
         # plus Pauli-Fierz terms Eq. (12) in [McTague:2021:ChemRxiv]
+<<<<<<< Updated upstream
         F = H + J * 2 - K + 2 * M - N
+=======
+        #F = H_0 + Q_PF + d_PF + J * 2 - K + 2 * M - N
+        F = H_0 + Q_PF + J * 2 - K - N
+>>>>>>> Stashed changes
 
         diis_e = np.einsum("ij,jk,kl->il", F, D, S) - np.einsum("ij,jk,kl->il", S, D, F)
         diis_e = A.dot(diis_e).dot(A)
@@ -222,7 +227,7 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
 
         # SCF energy and update: [Szabo:1996], Eqn. 3.184, pp. 150
         # Pauli-Fierz terms Eq. 13 of [McTague:2021:ChemRxiv]
-        SCF_E = np.einsum("pq,pq->", F + H, D) + Enuc + d_c
+        SCF_E = np.einsum("pq,pq->", F + H, D) + Enuc #+ d_c
 
         print(
             "SCF Iteration %3d: Energy = %4.16f   dE = % 1.5E   dRMS = %1.5E"
@@ -259,7 +264,7 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
         d_PF = (l_dot_mu_nuc - l_dot_mu_exp) * l_dot_mu_el
 
         # update Core Hamiltonian
-        H = H_0 + Q_PF + d_PF
+        H = H_0 + Q_PF #SEP6EDIT + d_PF
 
         # update dipole energetic contribution, Eq. (14) in [McTague:2021:ChemRxiv]
         d_c = (
@@ -282,19 +287,21 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
     rhf_two_e_cont = (
         J * 2 - K
     )  # note using just J and K that would contribute to ordinary RHF 2-electron energy
-    pf_two_e_cont = 2 * M - N
-
+    #pf_two_e_cont = 2 * M - N
+    pf_two_e_cont = -1 * N
     SCF_E_One = np.einsum("pq,pq->", rhf_one_e_cont, D)
     SCF_E_Two = np.einsum("pq,pq->", rhf_two_e_cont, D)
     CQED_SCF_E_Two = np.einsum("pq,pq->", pf_two_e_cont, D)
 
-    CQED_SCF_E_D_PF = np.einsum("pq,pq->", 2 * d_PF, D)
+    CQED_SCF_E_D_PF = 0 #np.einsum("pq,pq->", 2 * d_PF, D)
     CQED_SCF_E_Q_PF = np.einsum("pq,pq->", 2 * Q_PF, D)
 
     assert np.isclose(
         SCF_E_One + SCF_E_Two + CQED_SCF_E_D_PF + CQED_SCF_E_Q_PF + CQED_SCF_E_Two,
-        SCF_E - d_c - Enuc,
-    )
+        #SCF_E - d_c - Enuc,
+        SCF_E - Enuc,
+        1e-6
+        )
 
     cqed_rhf_dict = {
         "RHF ENERGY": psi4_rhf_energy,
