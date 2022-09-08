@@ -46,6 +46,8 @@ no_reorient
 symmetry c1
 """
 
+
+
 #h2o_string = """
 #O
 #H 1 1.1

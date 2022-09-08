@@ -130,10 +130,10 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
     Q_PF -= lambda_vector[1] * lambda_vector[2] * Q_ao_yz
 
     # Pauli-Fierz 1-e dipole terms scaled <\mu>_e
-    d_PF =  l_dot_mu_exp * l_dot_mu_el
+    d_PF =  -1 * l_dot_mu_exp * l_dot_mu_el
 
     # Pauli-Fierz (\lambda \cdot <\mu>_e ) ^ 2
-    d_c = l_dot_mu_exp ** 2
+    d_c = 0.5 * l_dot_mu_exp ** 2
 
     # ordinary H_core
     H_0 = T + V
@@ -225,10 +225,10 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
         l_dot_mu_exp = np.dot(lambda_vector, mu_exp_el)
         
         # Pauli-Fierz 1-e dipole terms scaled <\mu>_e
-        d_PF =  l_dot_mu_exp * l_dot_mu_el
+        d_PF =  -1 * l_dot_mu_exp * l_dot_mu_el
         
         # Pauli-Fierz (\lambda \cdot <\mu>_e ) ^ 2
-        d_c = l_dot_mu_exp ** 2
+        d_c = 0.5 * l_dot_mu_exp ** 2
 
         # update Core Hamiltonian
         H = H_0 + Q_PF + d_PF
