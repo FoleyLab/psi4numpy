@@ -47,7 +47,6 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
             'PSI4 WFN' -> wavefunction object from psi4 canonical RHF calcluation
             'CQED-RHF DIPOLE MOMENT' -> total dipole moment from CQED-RHF calculation (1x3 numpy array)
             'NUCLEAR DIPOLE MOMENT' -> nuclear dipole moment (1x3 numpy array)
-            'DIPOLE ENERGY' -> See Eq. (14) of [McTague:2021:ChemRxiv]
             'NUCLEAR REPULSION ENERGY' -> Total nuclear repulsion energy
 
     Example
@@ -101,12 +100,15 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
     mu_exp_y = np.einsum("pq,pq->", 2 * mu_ao_y, D)
     mu_exp_z = np.einsum("pq,pq->", 2 * mu_ao_z, D)
 
-
     # get electronic dipole expectation value
     mu_exp_el = np.array([mu_exp_x, mu_exp_y, mu_exp_z])
 
+    # get nuclear dipole moment
+    mu_nuc = np.array(
+        [mol.nuclear_dipole()[0], mol.nuclear_dipole()[1], mol.nuclear_dipole()[2]]
+    )
     # We need to carry around the electric field dotted into the nuclear dipole moment
-    
+
     # \lambda_vecto \cdot < \mu > where <\mu> contains ONLY electronic contributions
     l_dot_mu_exp = np.dot(lambda_vector, mu_exp_el)
 
@@ -130,10 +132,10 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
     Q_PF -= lambda_vector[1] * lambda_vector[2] * Q_ao_yz
 
     # Pauli-Fierz 1-e dipole terms scaled <\mu>_e
-    d_PF =  -1 * l_dot_mu_exp * l_dot_mu_el
+    d_PF = -1 * l_dot_mu_exp * l_dot_mu_el
 
     # Pauli-Fierz (\lambda \cdot <\mu>_e ) ^ 2
-    d_c = 0.5 * l_dot_mu_exp ** 2
+    d_c = 0.5 * l_dot_mu_exp**2
 
     # ordinary H_core
     H_0 = T + V
@@ -191,7 +193,7 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
 
         diis_e = np.einsum("ij,jk,kl->il", F, D, S) - np.einsum("ij,jk,kl->il", S, D, F)
         diis_e = A.dot(diis_e).dot(A)
-        dRMS = np.mean(diis_e ** 2) ** 0.5
+        dRMS = np.mean(diis_e**2) ** 0.5
 
         # SCF energy and update: [Szabo:1996], Eqn. 3.184, pp. 150
         # Pauli-Fierz terms Eq. 13 of [McTague:2021:ChemRxiv]
@@ -217,18 +219,18 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
         mu_exp_x = np.einsum("pq,pq->", 2 * mu_ao_x, D)
         mu_exp_y = np.einsum("pq,pq->", 2 * mu_ao_y, D)
         mu_exp_z = np.einsum("pq,pq->", 2 * mu_ao_z, D)
-        
+
         # get electronic dipole expectation value
         mu_exp_el = np.array([mu_exp_x, mu_exp_y, mu_exp_z])
-        
+
         # dot field vector into <\mu>_e
         l_dot_mu_exp = np.dot(lambda_vector, mu_exp_el)
-        
+
         # Pauli-Fierz 1-e dipole terms scaled <\mu>_e
-        d_PF =  -1 * l_dot_mu_exp * l_dot_mu_el
-        
+        d_PF = -1 * l_dot_mu_exp * l_dot_mu_el
+
         # Pauli-Fierz (\lambda \cdot <\mu>_e ) ^ 2
-        d_c = 0.5 * l_dot_mu_exp ** 2
+        d_c = 0.5 * l_dot_mu_exp**2
 
         # update Core Hamiltonian
         H = H_0 + Q_PF + d_PF
@@ -241,44 +243,34 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
     print("QED-RHF   energy: %.8f hartree" % SCF_E)
     print("Psi4  SCF energy: %.8f hartree" % psi4_rhf_energy)
 
-    rhf_one_e_cont = (
-        2 * H_0
-    )  # note using H_0 which is just T + V, and does not include Q_PF and d_PF
-    rhf_two_e_cont = (
-        J * 2 - K
-    )  
-    # note using just J and K that would contribute to ordinary RHF 2-electron energy
-    #pf_two_e_cont = 2 * M - N
-    pf_two_e_cont = -1 * N
-    SCF_E_One = np.einsum("pq,pq->", rhf_one_e_cont, D)
-    SCF_E_Two = np.einsum("pq,pq->", rhf_two_e_cont, D)
-    CQED_SCF_E_Two = np.einsum("pq,pq->", pf_two_e_cont, D)
+    # compute various energetic contributions
+    SCF_1E = np.einsum("pq,pq->", 2 * H_0, D)
+    SCF_2E_J = np.einsum("pq,pq->", 2 * J, D)
+    SCF_2E_K = np.einsum("pq,pq->", -1 * K, D)
+    PF_1E_d = np.einsum("pq,pq->", 2 * d_PF, D)
+    PF_1E_Q = np.einsum("pq,pq->", 2 * Q_PF, D)
+    PF_2E_M = np.einsum("pq,pq->", 2 * M, D)
+    PF_2E_N = np.einsum("pq,pq->", -1 * N, D)
 
-    CQED_SCF_E_D_PF = np.einsum("pq,pq->", 2 * d_PF, D)
-    CQED_SCF_E_Q_PF = np.einsum("pq,pq->", 2 * Q_PF, D)
+    # sum these together and see if equal to SCF_E - Enuc - d_c
+    PF_E_el = SCF_1E + SCF_2E_J + SCF_2E_K + PF_1E_d + PF_1E_Q + PF_2E_M + PF_2E_N
+    # does this agree with the final SCF energy when you subtract off nuclear contribut
+    assert np.isclose(SCF_E - Enuc - d_c, PF_E_el, 1e-9)
 
-    #assert np.isclose(
-    #    SCF_E_One + SCF_E_Two + CQED_SCF_E_D_PF + CQED_SCF_E_Q_PF + CQED_SCF_E_Two,
-    #    #SCF_E - d_c - Enuc,
-    #    #SCF_E - Enuc,
-    #    #1e-6
-    #    )
+    # Eugene claims that PF_2E_M + PF_1E_d + d_c  = 0 
+    PF_superfluous = PF_2E_M + PF_1E_d + d_c
+    assert np.isclose(PF_superfluous, 0, 1e-9)
 
     cqed_rhf_dict = {
         "RHF ENERGY": psi4_rhf_energy,
         "CQED-RHF ENERGY": SCF_E,
-        "1E ENERGY": SCF_E_One,
-        "2E ENERGY": SCF_E_Two,
-        "1E DIPOLE ENERGY": CQED_SCF_E_D_PF,
-        "1E QUADRUPOLE ENERGY": CQED_SCF_E_Q_PF,
-        "2E DIPOLE ENERGY": CQED_SCF_E_Two,
         "CQED-RHF C": C,
         "CQED-RHF DENSITY MATRIX": D,
         "CQED-RHF EPS": e,
         "PSI4 WFN": wfn,
-        "CQED-RHF DIPOLE MOMENT": mu_exp_el,
+        "CQED-RHF DIPOLE MOMENT": mu_exp_el + mu_nuc,
+        "NUCLEAR DIPOLE MOMENT": mu_nuc,
         "DIPOLE ENERGY": d_c,
         "NUCLEAR REPULSION ENERGY": Enuc,
     }
-
     return cqed_rhf_dict
