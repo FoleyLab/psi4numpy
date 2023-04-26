@@ -27,11 +27,16 @@ numpy_memory = 2
 
 mol = psi4.geometry("""
 O
-H 1 1.1
-H 1 1.1 2 104
+H 1 1.4
+H 1 1.4 2 104.5
 symmetry c1
 """)
 
+#mol = psi4.geometry("""
+#Li
+#H 1 1.0
+#symmetry c1
+#""")
 
 psi4.set_options({'basis': 'sto-3g',
                   'scf_type': 'pk',
@@ -89,10 +94,20 @@ from itertools import combinations
 print('Generating %d CIS singlet Determinants...' % (nDet_S + 1))
 t = time.time()
 
+jdets = []
 occList = [i for i in range(ndocc)]
 det_ref = Determinant(alphaObtList=occList, betaObtList=occList)
 detList = det_ref.generateSingleExcitationsOfDet(nmo)
-detList.append(det_ref)
+#detList.append(det_ref)
+jdets.append(det_ref)
+for i in range(len(detList)):
+    jdets.append(detList[i])
+
+#jdets.append(det_ref)
+#jdets.append(detList)
+for i in range(len(jdets)):
+    print(jdets[i])
+
 
 print('..finished generating determinants in %.3f seconds.\n' % (time.time() - t))
 
@@ -121,5 +136,6 @@ print('\nCIS Excitation Energies (Singlets only):')
 print(' #        Hartree                  eV')
 print('--  --------------------  --------------------')
 for i in range(1, len(e_cis)):
+    energy = e_cis[i] + mol.nuclear_repulsion_energy()
     excit_e = e_cis[i] + mol.nuclear_repulsion_energy() - scf_e
-    print('%2d %20.10f %20.10f' % (i, excit_e, excit_e * hartree2eV))
+    print('%2d %20.10f %20.10f' % (i, energy, excit_e * hartree2eV))

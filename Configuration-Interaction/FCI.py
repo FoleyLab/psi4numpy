@@ -37,6 +37,11 @@ H 1 1.1 2 104
 symmetry c1
 """)
 
+#mol = psi4.geometry("""
+#H 
+#H 1 1.0
+#symmetry c1
+#""")
 
 psi4.set_options({'basis': 'sto-3g',
                   'scf_type': 'pk',
@@ -113,14 +118,17 @@ t = time.time()
 
 e_fci, wavefunctions = np.linalg.eigh(Hamiltonian_matrix)
 print('..finished diagonalization in %.3f seconds.\n' % (time.time() - t))
+print(F'e_fci[0] is {e_fci[0]}')
 
 fci_mol_e = e_fci[0] + mol.nuclear_repulsion_energy()
-
+fci_mol_e1 = e_fci[1] + mol.nuclear_repulsion_energy()
+print("nuc energy",mol.nuclear_repulsion_energy())
 print('# Determinants:     % 16d' % (len(detList)))
 
 print('SCF energy:         % 16.10f' % (scf_e))
 print('FCI correlation:    % 16.10f' % (fci_mol_e - scf_e))
 print('Total FCI energy:   % 16.10f' % (fci_mol_e))
+print('Total FCI e1:       % 16.10f' % (fci_mol_e1))
 
 if compare_psi4:
     psi4.compare_values(psi4.energy('FCI'), fci_mol_e, 6, 'FCI Energy')

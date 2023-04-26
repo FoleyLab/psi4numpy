@@ -109,6 +109,7 @@ print(
     "    CASE 1 CQED-CIS LOWEST EXCITATION ENERGY (eV)   %.4f"
     % (np.real(cqed_cis_e_1[1]) * psi4.constants.Hartree_energy_in_eV)
 )
+print(" |e> ENERGY IN AU:", np.real(cqed_cis_e_1[1]) + psi4_rhf_e)
 
 print(
     "\n    PRINTING RESULTS FOR CASE 2: HBAR * OMEGA = 4.75 eV, LAMBDA = (0, 0, 0.0125) A.U."
@@ -121,7 +122,9 @@ print(
     "    CASE 2 |X,0> -> |UP> Energy (eV)                %.4f"
     % (np.real(cqed_cis_e_2[2]) * psi4.constants.Hartree_energy_in_eV)
 )
-
+print(" |G> ENERGY IN AU:", np.real(cqed_cis_e_2[0]) + scf_e_2)
+print(" |LP> ENERGY IN AU:", np.real(cqed_cis_e_2[1]) + scf_e_2)
+print(" |UP> ENERGY IN AU:", np.real(cqed_cis_e_2[2]) + scf_e_2)
 print(
     "\n    PRINTING RESULTS FOR CASE 3: HBAR * OMEGA = (4.75 - 0.22i) eV, LAMBDA = (0, 0, 0.0125) A.U."
 )
@@ -144,3 +147,8 @@ psi4.compare_values(cqed_cis_e_1[1], psi4_excitation_e[0], 8, "CASE 1 CQED-CIS E
 # check to see if first CQED-CIS excitation energy matches value from [McTague:2021:ChemRxiv] Figure 3 for case 2
 # This still needs to be corrected in the paper!
 psi4.compare_values(cqed_cis_e_2[1], 0.1655708380, 8, "CASE 2 CQED-CIS E")
+print(" QED-CIS ENERGIES RELATIVE TO QED-RHF FOR CASE 1")
+print(F' {cqed_cis_e_2[0]:.12f}')
+print(F'{cqed_cis_e_2[1]:.12f}')
+print(F'{cqed_cis_e_2[2]:.12f}')
+
