@@ -23,7 +23,7 @@ import md_helper
 psi4.core.set_output_file('md_output.dat',False)
 
 molec = psi4.geometry("""
-H 0 0 0
+Li 0 0 0
 H 0 0 1
 """)
 
@@ -33,10 +33,10 @@ amu2au = 1822.8884850
 
 #MD Options
 timestep =  5                       # Time step for each iteration in time atomic units
-max_md_step = 100                 # Number of MD iterations
+max_md_step = 500                 # Number of MD iterations
 veloc0 = np.zeros((2,3))            # Numpy array (natoms,3) with inital velocities
 trajec = True                       # Boolean: Save all trajectories in a single xyz file (md_trajectories)  for visualization
-grad_method = 'hf/3-21g'            # Method (QC with basis set) for energy and gradient
+grad_method = 'hf/6-31g'            # Method (QC with basis set) for energy and gradient
 int_alg = 'veloc_verlet'            # Algorithm to use as integrator
 opt    = False                      # Optimize geometry using F=ma
 
