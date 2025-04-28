@@ -67,7 +67,7 @@ class RHFGrad:
         return rhf_wfn
     
 
-    def compute_derivative_quantities(self):
+    def compute_gradient_quantities(self):
         """
         Method to compute the necessary integrals for the RHF gradient, specifically the terms in this equation:
         .. math::
@@ -119,8 +119,8 @@ class RHFGrad:
         # get number of atoms
         n_atoms = molecule.natom()
 
-        # get the nuclear gradient
-        self.nuclear_energy_gradient =  np.asarray(molecule.nuclear_repulsion_energy_deriv1())
+        # get the nuclear gradient as a 1D numpy array
+        self.nuclear_energy_gradient =  np.asarray(molecule.nuclear_repulsion_energy_deriv1()).flatten()
 
         # Get the RHF wavefunction
         wfn = self.compute_rhf_wfn()
@@ -135,7 +135,7 @@ class RHFGrad:
 
         # get the Density matrix by summing over the occupied orbital transformation matrix
         Cocc = Cnp[:, :n_docc]
-        self.density_matrix = np.einsum("pi,qi->pq", Cocc, Cocc) * 2
+        self.density_matrix = np.einsum("pi,qi->pq", Cocc, Cocc)
 
         # instantiate the MintsHelper object
         mints = psi4.core.MintsHelper(wfn.basisset())
@@ -155,6 +155,64 @@ class RHFGrad:
 
         self.fock_matrix_mo = np.copy(F)
 
-        return fock_matrix, density_matrix, overlap_matrix
+        # initialize array for the integral derivatives
+        self.overlap_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+        self.potential_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+        self.kinetic_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+        self.eri_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals, n_orbitals, n_orbitals))
+        self.J_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+        self.K_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+
+        # initialize the gradient arrays
+        self.pulay_force = np.zeros(3 * n_atoms)
+        self.kinetic_gradient = np.zeros(3 * n_atoms)
+        self.potential_gradient = np.zeros(3 * n_atoms)
+        self.J_gradient = np.zeros(3 * n_atoms)
+        self.K_gradient = np.zeros(3 * n_atoms)
+        self.total_gradient = np.zeros(3 * n_atoms)
+
+        # loop over the atoms
+        for i in range(n_atoms):
+            # loop over the cartesian coordinates
+            for j in range(3):
+                # define the derivative index
+                deriv_index = 3 * i + j
+
+                # get the one-electron integral derivatives
+                # overlap is in the MO basis
+                self.overlap_deriv_matrix_ao[deriv_index] = np.asarray(mints.mo_oei_deriv1("OVERLAP", i, C, C )[j])
+
+                # all others are in the AO basis
+                self.potential_deriv_matrix_ao[deriv_index] = np.asarray(mints.ao_oei_deriv1("POTENTIAL", i)[j])
+                self.kinetic_deriv_matrix_ao[deriv_index] = np.asarray(mints.ao_oei_deriv1("KINETIC", i)[j])
+
+                # get the two-electron integral derivatives
+                self.eri_deriv_matrix_ao[deriv_index] = np.asarray(mints.ao_tei_deriv1(i)[j])
+
+                # compute the J and K derivetives
+                self.J_deriv_matrix_ao[deriv_index] = 2 * np.einsum("uvls,ls->uv", self.eri_deriv_matrix_ao[deriv_index, :, :, :, :], self.density_matrix)
+
+                self.K_deriv_matrix_ao[deriv_index] =  -1 * np.einsum("ulvs,ls->uv", self.eri_deriv_matrix_ao[deriv_index, :, :, :, :], self.density_matrix)
+
+                # now contract each of the derivatives with the density matrix to get the respective gradient components
+                # Pulay force first
+                self.pulay_force[deriv_index] = -2.0 * np.einsum("ii,ii->", self.fock_matrix_mo[:n_docc, :n_docc], self.overlap_deriv_matrix_ao[deriv_index, :n_docc, :n_docc])
+
+                # kinetic gradient
+                self.kinetic_gradient[deriv_index] = 2 * np.einsum("uv,uv->", self.density_matrix, self.kinetic_deriv_matrix_ao[deriv_index, :, :])
+
+                # potential gradient
+                self.potential_gradient[deriv_index] = 2 * np.einsum("uv,uv->", self.density_matrix, self.potential_deriv_matrix_ao[deriv_index, :, :])
+
+                # J gradient
+                self.J_gradient[deriv_index] = np.einsum("uv,uv->", self.density_matrix, self.J_deriv_matrix_ao[deriv_index, :, :])
+
+                # K gradient
+                self.K_gradient[deriv_index] = np.einsum("uv,uv->", self.density_matrix, self.K_deriv_matrix_ao[deriv_index, :, :])
+                                                                    
+
+        self.total_gradient = self.nuclear_energy_gradient + self.pulay_force + self.kinetic_gradient + self.potential_gradient + self.J_gradient + self.K_gradient
+
+        return self.total_gradient
         
     
