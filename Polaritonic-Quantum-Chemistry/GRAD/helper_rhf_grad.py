@@ -136,6 +136,16 @@ class RHFGrad:
         # get the Density matrix by summing over the occupied orbital transformation matrix
         Cocc = Cnp[:, :n_docc]
         self.density_matrix = np.einsum("pi,qi->pq", Cocc, Cocc)
+        
+        # get Da and Db from wfn object -> might be redundant
+        Da = np.asarray(wfn.Da())
+        Db = np.asarray(wfn.Db())
+
+        # D symmetrized
+        D_sym = 0.5 * (Da + Db) + 0.5 * np.einsum('rs -> sr', (Da + Db))
+
+        # origin vector
+        origin = [0.0, 0.0, 0.0]
 
         # instantiate the MintsHelper object
         mints = psi4.core.MintsHelper(wfn.basisset())
