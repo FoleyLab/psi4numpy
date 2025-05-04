@@ -16,8 +16,8 @@ symmetry c1
 psi4_options_dict = {
     "basis": "sto-3g",
     "scf_type": "pk",
-    "e_convergence": 1e-8,
-    "d_convergence": 1e-8
+    "e_convergence": 1e-12,
+    "d_convergence": 1e-12
 }
 
 # Define lambda vector (example values)

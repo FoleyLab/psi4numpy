@@ -1,0 +1,22 @@
+Original 5
+To what extent have Cottrell Scholars used AI tools in their teaching? What has been tried? What has facilitated adoption? What challenges have been encountered?
+How do Cottrell Scholars view the possibilities for AI tools in education? Are there use cases that appear promising? What barriers to their realization exist? What are possible downsides to greater us of AI tools?
+To what extent have departments and institutions acted to facilitate or inhibit use of AI tools? Have departments or institutions developed new courses, degree programs, curricular approaches or centers around AI in the physical sciences? What training is available to support faculty in integrated AI?
+To what extent have AI tools been integrated into other approaches to adopt computation?
+To what extent have Cottrell Scholars used AI tools in their research?
+LLM 1:
+Question 1: To what extent have Cottrell Scholars integrated AI tools into their teaching and research, and what factors have facilitated or hindered their adoption? What specific use cases, challenges, and potential downsides have they identified in both educational and research contexts?
+Question 2: How do institutional and departmental policies, resources, and training programs influence the adoption and integration of AI tools in teaching and research? Have new courses, curricula, or centers been developed to support AI in the physical sciences?
+Question 3: How does the integration of AI tools align with or diverge from broader efforts to adopt computational approaches in education and research? What synergies or tensions exist between AI and other computational methods?
+LLM 2:
+Condensed Question 1: How have Cottrell Scholars integrated AI tools into their teaching and research? What has been tried, what challenges have arisen, and what factors have facilitated adoption?
+Condensed Question 2: What are the perceived opportunities and risks of AI tools in education and research? Which use cases seem most promising, and what barriers exist to broader adoption?
+Condensed Question 3: How have departments and institutions influenced the use of AI tools? Have they introduced new courses, degree programs, or training initiatives to support AI integration in the physical sciences?
+LLM 3:
+Option 1: (2 Questions)
+How are Cottrell Scholars using AI tools in their teaching and research, and what are their perspectives on the potential and challenges of AI in education? (This combines questions 1, 2, and 5 by linking current usage with future perspectives.)
+How have departments and institutions supported or hindered the adoption of AI tools in education, and how does this relate to broader efforts to integrate computation? (This combines questions 3 and 4 by connecting institutional actions with the wider context of computational integration.)
+Option 2 (3 Questions):
+What are Cottrell Scholars' experiences using AI tools in their teaching and research, including specific applications, adoption facilitators, and encountered challenges? (This focuses on the practical application and combines elements of questions 1 and 5.)
+What are Cottrell Scholars' perspectives on the potential of AI in education, including promising use cases, existing barriers, and potential downsides? (This focuses on future possibilities and combines elements of question 2.)
+How have departments and institutions responded to the growing use of AI tools in education, including support structures, training programs, and integration with broader computational initiatives? (This addresses the institutional context and combines questions 3 and 4.)
