@@ -306,6 +306,18 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
 
     quad_exp = np.array([q_exp_xx, q_exp_xy, q_exp_xz, q_exp_yz, q_exp_yy, q_exp_yz, q_exp_zz])
 
+    # Let's update a few important quantities for the wfn object with QED-RHF quantities
+    wfn_dict = psi4.core.Wavefunction.to_file(wfn)
+    wfn_dict['matrix']['Ca'] = np.copy(C)
+    wfn_dict['matrix']['Cb'] = np.copy(C)
+    wfn_dict['matrix']['Da'] = np.copy(D)
+    wfn_dict['matrix']['Db'] = np.copy(D)
+    wfn_dict['matrix']['Fa'] = np.copy(F)
+    wfn_dict['matrix']['Fb'] = np.copy(F)
+    wfn_dict['vector']['epsilon_a'] = np.copy(e)
+    wfn_dict['vector']['epsilon_b'] = np.copy(e)
+    qed_wfn = psi4.core.Wavefunction.from_file(wfn_dict)
+
     cqed_rhf_dict = {
         "RHF ENERGY": psi4_rhf_energy,
         "CQED-RHF QUADRUPOLE MOMENT" : quad_exp,
@@ -320,6 +332,7 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
         "CQED-RHF EPS": e,
         "CQED-RHF FOCK" : F,
         "PSI4 WFN": wfn,
+        "CQED-RHF WFN" : qed_wfn,
         "RHF DIPOLE MOMENT": rhf_dipole_moment,
         "CQED-RHF DIPOLE MOMENT": np.array([mu_exp_x, mu_exp_y, mu_exp_z]),
         "NUCLEAR DIPOLE MOMENT": np.array([mu_nuc_x, mu_nuc_y, mu_nuc_z]),
