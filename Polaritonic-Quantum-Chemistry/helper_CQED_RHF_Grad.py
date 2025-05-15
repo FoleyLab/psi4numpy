@@ -1,8 +1,13 @@
-# a helper class for computing the RHF gradient
+"""
+Reference implementation of the CQED-RHF analytic nuclear gradient.
+
+"""
+
 import psi4
 import numpy as np
+from helper_CQED_RHF import *
 
-class RHFGrad:
+class QEDRHFGrad:
     def __init__(self, options):
         """
         Initialize the RHFGrad object with a configuration dictionary.
@@ -37,7 +42,7 @@ class RHFGrad:
 
 
 
-    def compute_rhf_wfn(self):
+    def compute_qed_rhf_wfn(self):
         """
         Method to compute the RHF wavefunction using Psi4 and return the wavefunction object.
 
@@ -64,7 +69,41 @@ class RHFGrad:
         
         self.rhf_energy = rhf_e 
 
-        return rhf_wfn
+        # now get the cqed info 
+        # compute the QED-RHF energy and density matrix
+        cqed_dict = cqed_rhf(self.lambda_vector, self.molecule_string, self.psi4_options)
+
+        # parse dictionary for ordinary RHF and CQED-RHF energy
+        _rhf_e = cqed_dict["RHF ENERGY"]
+        _cqed_rhf_e = cqed_dict["CQED-RHF ENERGY"]
+
+        # confirm the rhf energy from this method mmatches psi4
+        assert np.isclose(_rhf_e, rhf_e)
+
+        # parse dictionary for density matrix
+        _cqed_rhf_D = cqed_dict["CQED-RHF DENSITY MATRIX"]
+        _cqed_rhf_C = cqed_dict["CQED-RHF C"]
+        _cqed_rhf_eps = cqed_dict["CQED-RHF EPS"]
+        _cqed_rhf_F = cqed_dict["CQED-RHF FOCK"]
+
+        # update the wavefunction object with the QED-RHF information
+        # update the wfn object with the coefficients and density matrix from the cavity calculation
+        wfn_dict = psi4.core.Wavefunction.to_file(rhf_wfn)
+
+        # now update the quantities with cqed quantities
+        wfn_dict['matrix']['Ca'] = np.copy(_cqed_rhf_C)
+        wfn_dict['matrix']['Cb'] = np.copy(_cqed_rhf_C)
+        wfn_dict['matrix']['Da'] = np.copy(_cqed_rhf_D)
+        wfn_dict['matrix']['Db'] = np.copy(_cqed_rhf_D)
+        wfn_dict['matrix']['Fa'] = np.copy(_cqed_rhf_F)
+        wfn_dict['matrix']['Fb'] = np.copy(_cqed_rhf_F)
+        wfn_dict['vector']['epsilon_a'] = np.copy(_cqed_rhf_eps)
+        wfn_dict['vector']['epsilon_b'] = np.copy(_cqed_rhf_eps)
+        # push these back to the wavefunction object
+        self.qed_rhf_wfn = psi4.core.Wavefunction.from_file(wfn_dict)
+
+
+        return self.qed_rhf_wfn
     
 
     def compute_gradient_quantities(self):
@@ -123,7 +162,7 @@ class RHFGrad:
         self.nuclear_energy_gradient =  np.asarray(molecule.nuclear_repulsion_energy_deriv1()).flatten()
 
         # Get the RHF wavefunction
-        wfn = self.compute_rhf_wfn()
+        wfn = self.compute_qed_rhf_wfn()
 
         # get the number of orbitals and the number of doubly occupied orbitals
         n_orbitals = wfn.nmo()
@@ -144,11 +183,23 @@ class RHFGrad:
         # D symmetrized
         D_sym = 0.5 * (Da + Db) + 0.5 * np.einsum('rs -> sr', (Da + Db))
 
+        D = psi4.core.Matrix.from_array(D_sym)
+
         # origin vector
         origin = [0.0, 0.0, 0.0]
 
         # instantiate the MintsHelper object
         mints = psi4.core.MintsHelper(wfn.basisset())
+
+        # get the derivatives of the dipole integrals
+        mu_mo = np.asarray(mints.dipole_grad(D))
+        print("Shape of mu_mo: ", mu_mo.shape)
+
+        # get the derivatives of the quadrupole integrals
+        max_order = 2
+        q_mo = np.asarray(mints.multipole_grad(D, max_order, origin))
+
+        print("Shape of q_mo: ", q_mo.shape)
 
         # get the one-electron integrals
         H_ao = np.asarray(mints.ao_kinetic()) + np.asarray(mints.ao_potential())
@@ -169,16 +220,21 @@ class RHFGrad:
         self.overlap_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         self.potential_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         self.kinetic_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+        self.quad_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         self.eri_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals, n_orbitals, n_orbitals))
         self.J_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         self.K_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+        self.K_dse_deriv_matrix_ao = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+
 
         # initialize the gradient arrays
         self.pulay_force = np.zeros(3 * n_atoms)
         self.kinetic_gradient = np.zeros(3 * n_atoms)
         self.potential_gradient = np.zeros(3 * n_atoms)
+        self.quad_gradient = np.zeros(3 * n_atoms)
         self.J_gradient = np.zeros(3 * n_atoms)
         self.K_gradient = np.zeros(3 * n_atoms)
+        self.K_dse_gradient = np.zeros(3 * n_atoms)
         self.total_gradient = np.zeros(3 * n_atoms)
 
         # loop over the atoms

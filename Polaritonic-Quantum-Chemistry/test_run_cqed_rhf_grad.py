@@ -1,5 +1,5 @@
 
-from helper_rhf_grad import RHFGrad
+from helper_CQED_RHF_Grad import QEDRHFGrad
 import numpy as np
 
 
@@ -31,10 +31,10 @@ options = {
 }
 
 # Instantiate the RHFGrad class
-rhf_grad = RHFGrad(options)
+rhf_grad = QEDRHFGrad(options)
 
 # Compute the RHF wavefunction
-rhf_wfn = rhf_grad.compute_rhf_wfn()
+rhf_wfn = rhf_grad.compute_qed_rhf_wfn()
 print(f"RHF Energy: {rhf_grad.rhf_energy}")
 
 # Compute the gradient quantities

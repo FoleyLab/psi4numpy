@@ -296,8 +296,19 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
         SCF_E - d_c - Enuc,
     )
 
+    # update electronic dipole expectation value
+    q_exp_xx = np.einsum("pq,pq->", 2 * Q_ao_xx, D)
+    q_exp_yy = np.einsum("pq,pq->", 2 * Q_ao_yy, D)
+    q_exp_zz = np.einsum("pq,pq->", 2 * Q_ao_zz, D) 
+    q_exp_xy = np.einsum("pq,pq->", 2 * Q_ao_xy, D)
+    q_exp_xz = np.einsum("pq,pq->", 2 * Q_ao_xz, D)
+    q_exp_yz = np.einsum("pq,pq->", 2 * Q_ao_yz, D)
+
+    quad_exp = np.array([q_exp_xx, q_exp_xy, q_exp_xz, q_exp_yz, q_exp_yy, q_exp_yz, q_exp_zz])
+
     cqed_rhf_dict = {
         "RHF ENERGY": psi4_rhf_energy,
+        "CQED-RHF QUADRUPOLE MOMENT" : quad_exp,
         "CQED-RHF ENERGY": SCF_E,
         "1E ENERGY": SCF_E_One,
         "2E ENERGY": SCF_E_Two,
@@ -307,6 +318,7 @@ def cqed_rhf(lambda_vector, molecule_string, psi4_options_dict):
         "CQED-RHF C": C,
         "CQED-RHF DENSITY MATRIX": D,
         "CQED-RHF EPS": e,
+        "CQED-RHF FOCK" : F,
         "PSI4 WFN": wfn,
         "RHF DIPOLE MOMENT": rhf_dipole_moment,
         "CQED-RHF DIPOLE MOMENT": np.array([mu_exp_x, mu_exp_y, mu_exp_z]),
