@@ -1,6 +1,7 @@
 import psi4
 import numpy as np
 import time
+import json
 
 class CQEDRHFCalculator:
     def __init__(self, lambda_vector, molecule_string, psi4_options):
@@ -41,29 +42,46 @@ class CQEDRHFCalculator:
         T = np.asarray(mints.ao_kinetic())
         I = np.asarray(mints.ao_eri())
 
-        mu_nuc = np.array(mol.nuclear_dipole())
-        mu_ao = np.array([np.asarray(x) for x in mints.ao_dipole()])
-        l_dot_mu_el = sum(l * mu for l, mu in zip(self.lambda_vector, mu_ao))
+        mu_nuc_x = mol.nuclear_dipole()[0]
+        mu_nuc_y = mol.nuclear_dipole()[1]
+        mu_nuc_z = mol.nuclear_dipole()[2]
 
-        mu_exp = np.einsum("i,pq,pq->i", [2]*3, mu_ao, D)
-        mu_exp += mu_nuc
+        # electronic dipole integrals in AO basis
+        mu_ao_x = np.asarray(mints.ao_dipole()[0])
+        mu_ao_y = np.asarray(mints.ao_dipole()[1])
+        mu_ao_z = np.asarray(mints.ao_dipole()[2])
+        #mu_nuc_x, mu_nuc_y, mu_nuc_z = mol.nuclear_dipole()
+        mu_nuc = np.array([mu_nuc_x, mu_nuc_y, mu_nuc_z])
+
+        #mu_ao_x, mu_ao_y, mu_ao_z = [np.asarray(x) for x in mints.ao_dipole()]
+        mu_ao = np.array([mu_ao_x, mu_ao_y, mu_ao_z])
+
+        l_dot_mu_el = sum(self.lambda_vector[i] * mu_ao[i] for i in range(3))
+
+        mu_exp = np.array([
+            2 * np.einsum("pq,pq->", mu_ao[i], D) for i in range(3)
+        ]) + mu_nuc
 
         self.rhf_dipole_moment = mu_exp.copy()
-        l_dot_mu_nuc = np.dot(self.lambda_vector, mu_nuc)
-        l_dot_mu_exp = np.dot(self.lambda_vector, mu_exp)
+        l_dot_mu_nuc = sum(self.lambda_vector[i] * mu_nuc[i] for i in range(3))
+        l_dot_mu_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
 
         d_c = 0.5 * l_dot_mu_nuc**2 - l_dot_mu_nuc * l_dot_mu_exp + 0.5 * l_dot_mu_exp**2
         self.dipole_energy = d_c
 
-        Q_ao = [np.asarray(x) for x in mints.ao_quadrupole()]
-        Q_PF = -0.5 * sum(l**2 * Q for l, Q in zip(self.lambda_vector, [Q_ao[0], Q_ao[3], Q_ao[5]]))
-        Q_PF -= self.lambda_vector[0] * self.lambda_vector[1] * Q_ao[1]
-        Q_PF -= self.lambda_vector[0] * self.lambda_vector[2] * Q_ao[2]
-        Q_PF -= self.lambda_vector[1] * self.lambda_vector[2] * Q_ao[4]
+        Q_ao_xx, Q_ao_xy, Q_ao_xz, Q_ao_yy, Q_ao_yz, Q_ao_zz = [np.asarray(x) for x in mints.ao_quadrupole()]
+        Q_ao = [Q_ao_xx, Q_ao_xy, Q_ao_xz, Q_ao_yy, Q_ao_yz, Q_ao_zz]
+
+        Q_PF = -0.5 * self.lambda_vector[0]**2 * Q_ao_xx
+        Q_PF -= 0.5 * self.lambda_vector[1]**2 * Q_ao_yy
+        Q_PF -= 0.5 * self.lambda_vector[2]**2 * Q_ao_zz
+        Q_PF -= self.lambda_vector[0] * self.lambda_vector[1] * Q_ao_xy
+        Q_PF -= self.lambda_vector[0] * self.lambda_vector[2] * Q_ao_xz
+        Q_PF -= self.lambda_vector[1] * self.lambda_vector[2] * Q_ao_yz
 
         d_PF = (l_dot_mu_nuc - l_dot_mu_exp) * l_dot_mu_el
         H_0 = T + V
-        H = H_0 + Q_PF + d_PF
+        H = H_0 + Q_PF #+ d_PF
 
         S = mints.ao_overlap()
         A = mints.ao_overlap()
@@ -83,11 +101,11 @@ class CQEDRHFCalculator:
             K = np.einsum("prqs,rs->pq", I, D)
             M = np.einsum("pq,rs,rs->pq", l_dot_mu_el, l_dot_mu_el, D)
             N = np.einsum("pr,qs,rs->pq", l_dot_mu_el, l_dot_mu_el, D)
-            F = H + 2 * J - K + 2 * M - N
+            F = H + 2 * J - K - N # + 2 * M - N
 
             diis_e = A @ (F @ D @ S - S @ D @ F) @ A
             dRMS = np.sqrt(np.mean(diis_e**2))
-            E_scf = np.einsum("pq,pq->", F + H, D) + Enuc + d_c
+            E_scf = np.einsum("pq,pq->", F + H, D) + Enuc #+ d_c
 
             if abs(E_scf - Eold) < E_conv and dRMS < D_conv:
                 break
@@ -99,11 +117,13 @@ class CQEDRHFCalculator:
             Cocc = C[:, :ndocc]
             D = np.einsum("pi,qi->pq", Cocc, Cocc)
 
-            mu_exp = np.einsum("i,pq,pq->i", [2]*3, mu_ao, D)
-            mu_exp += mu_nuc
-            l_dot_mu_exp = np.dot(self.lambda_vector, mu_exp)
+            mu_exp = np.array([
+                2 * np.einsum("pq,pq->", mu_ao[i], D) for i in range(3)
+            ]) + mu_nuc
+
+            l_dot_mu_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
             d_PF = (l_dot_mu_nuc - l_dot_mu_exp) * l_dot_mu_el
-            H = H_0 + Q_PF + d_PF
+            H = H_0 + Q_PF #+ d_PF
             d_c = 0.5 * l_dot_mu_nuc**2 - l_dot_mu_nuc * l_dot_mu_exp + 0.5 * l_dot_mu_exp**2
         else:
             psi4.core.clean()
@@ -117,7 +137,7 @@ class CQEDRHFCalculator:
         self.dipole_moment = mu_exp
         self.nuclear_dipole_moment = mu_nuc
 
-        q_exp = np.array([np.einsum("pq,pq->", 2 * Q, D) for Q in Q_ao])
+        q_exp = np.array([2 * np.einsum("pq,pq->", Q, D) for Q in Q_ao])
         self.quadrupole_moment = q_exp
 
         wfn_dict = psi4.core.Wavefunction.to_file(wfn)
@@ -138,7 +158,6 @@ class CQEDRHFCalculator:
         print(f"Nuclear Repulsion:    {self.nuclear_repulsion_energy:.8f} Ha")
         print(f"Dipole Moment:        {self.dipole_moment}")
 
-
     def export_to_json(self, filename):
         data = {
             "RHF Energy": self.rhf_energy,
@@ -153,3 +172,4 @@ class CQEDRHFCalculator:
         }
         with open(filename, 'w') as f:
             json.dump(data, f, indent=4)
+
