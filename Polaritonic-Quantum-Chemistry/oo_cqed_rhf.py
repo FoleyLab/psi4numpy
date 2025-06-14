@@ -2,6 +2,7 @@ import psi4
 import numpy as np
 import time
 import json
+import opt_einsum as oe
 
 class CQEDRHFCalculator:
     def __init__(self, lambda_vector, molecule_string, psi4_options):
@@ -36,7 +37,7 @@ class CQEDRHFCalculator:
         ndocc = wfn.nalpha()
         C = np.asarray(wfn.Ca())
         Cocc = C[:, :ndocc]
-        D = np.einsum("pi,qi->pq", Cocc, Cocc)
+        D = oe.contract("pi,qi->pq", Cocc, Cocc, optimize="optimal")
 
         V = np.asarray(mints.ao_potential())
         T = np.asarray(mints.ao_kinetic())
@@ -59,7 +60,7 @@ class CQEDRHFCalculator:
         l_dot_mu_el = sum(self.lambda_vector[i] * mu_ao[i] for i in range(3))
 
         mu_exp = np.array([
-            2 * np.einsum("pq,pq->", mu_ao[i], D) for i in range(3)
+            2 * oe.contract("pq,pq->", mu_ao[i], D, optimize='optimal') for i in range(3)
         ]) + mu_nuc
 
         self.rhf_dipole_moment = mu_exp.copy()
@@ -81,7 +82,7 @@ class CQEDRHFCalculator:
 
         d_PF = (l_dot_mu_nuc - l_dot_mu_exp) * l_dot_mu_el
         H_0 = T + V
-        H = H_0 + Q_PF #+ d_PF
+        H = H_0 + Q_PF 
 
         S = mints.ao_overlap()
         A = mints.ao_overlap()
@@ -97,15 +98,16 @@ class CQEDRHFCalculator:
         D_conv = self.psi4_options.get("d_convergence", 1.0e-5)
 
         for scf_iter in range(1, maxiter + 1):
-            J = np.einsum("pqrs,rs->pq", I, D)
-            K = np.einsum("prqs,rs->pq", I, D)
-            M = np.einsum("pq,rs,rs->pq", l_dot_mu_el, l_dot_mu_el, D)
-            N = np.einsum("pr,qs,rs->pq", l_dot_mu_el, l_dot_mu_el, D)
-            F = H + 2 * J - K - N # + 2 * M - N
+            J = oe.contract("pqrs,rs->pq", I, D, optimize="optimal")
+            K = oe.contract("prqs,rs->pq", I, D, optimize="optimal")
+            
+            N = oe.contract("pr,qs,rs->pq", l_dot_mu_el, l_dot_mu_el, D, optimize="optimal")
+
+            F = H + 2 * J - K - N 
 
             diis_e = A @ (F @ D @ S - S @ D @ F) @ A
             dRMS = np.sqrt(np.mean(diis_e**2))
-            E_scf = np.einsum("pq,pq->", F + H, D) + Enuc #+ d_c
+            E_scf = oe.contract("pq,pq->", F + H, D, optimize="optimal") + Enuc 
 
             if abs(E_scf - Eold) < E_conv and dRMS < D_conv:
                 break
@@ -117,14 +119,8 @@ class CQEDRHFCalculator:
             Cocc = C[:, :ndocc]
             D = np.einsum("pi,qi->pq", Cocc, Cocc)
 
-            mu_exp = np.array([
-                2 * np.einsum("pq,pq->", mu_ao[i], D) for i in range(3)
-            ]) + mu_nuc
+            H = H_0 + Q_PF 
 
-            l_dot_mu_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
-            d_PF = (l_dot_mu_nuc - l_dot_mu_exp) * l_dot_mu_el
-            H = H_0 + Q_PF #+ d_PF
-            d_c = 0.5 * l_dot_mu_nuc**2 - l_dot_mu_nuc * l_dot_mu_exp + 0.5 * l_dot_mu_exp**2
         else:
             psi4.core.clean()
             raise Exception("Maximum number of SCF cycles exceeded.")
@@ -137,7 +133,7 @@ class CQEDRHFCalculator:
         self.dipole_moment = mu_exp
         self.nuclear_dipole_moment = mu_nuc
 
-        q_exp = np.array([2 * np.einsum("pq,pq->", Q, D) for Q in Q_ao])
+        q_exp = oe.contract([2 * np.einsum("pq,pq->", Q, D, optimize="optimal") for Q in Q_ao])
         self.quadrupole_moment = q_exp
 
         wfn_dict = psi4.core.Wavefunction.to_file(wfn)
