@@ -39,6 +39,10 @@ class CQEDRHFCalculator:
         Cocc = C[:, :ndocc]
         D = oe.contract("pi,qi->pq", Cocc, Cocc, optimize="optimal")
 
+        self.ndocc = ndocc
+        self.n_orbitals = wfn.nmo()
+        self.num_atoms = mol.natom()
+
         V = np.asarray(mints.ao_potential())
         T = np.asarray(mints.ao_kinetic())
         I = np.asarray(mints.ao_eri())
@@ -215,8 +219,22 @@ class CQEDRHFCalculator:
         Returns:
             numpy.ndarray: The quadrupole gradient as a numpy array.
         """
+        self.o_dse_gradient = np.zeros(3 * self.num_atoms)
 
-        print(self.quad_grad)
+        for atom_index in range(self.num_atoms):
+            for cart_index in range(3):
+                deriv_index = 3 * atom_index + cart_index
+
+                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[0] ** 2 * self.quad_grad[deriv_index, 3]
+                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[1] ** 2 * self.quad_grad[deriv_index, 6]
+                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[2] ** 2 * self.quad_grad[deriv_index, 8]
+                self.o_dse_gradient[deriv_index] -= self.lambda_vector[0] * self.lambda_vector[1] * self.quad_grad[deriv_index, 4]
+                self.o_dse_gradient[deriv_index] -= self.lambda_vector[0] * self.lambda_vector[2] * self.quad_grad[deriv_index, 5]
+                self.o_dse_gradient[deriv_index] -= self.lambda_vector[1] * self.lambda_vector[2] * self.quad_grad[deriv_index, 7]
+
+        print(self.o_dse_gradient)
+
+        
     def export_to_json(self, filename):
         data = {
             "RHF Energy": self.rhf_energy,
