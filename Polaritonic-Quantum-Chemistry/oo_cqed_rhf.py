@@ -26,12 +26,12 @@ class CQEDRHFCalculator:
         self.wfn = None
         self.qed_wfn = None
 
-    def run(self):
+    def calc_cqed_rhf_energy(self):
         # define molecule and options
         mol = psi4.geometry(self.molecule_string)
         psi4.set_options(self.psi4_options)
         self.rhf_energy, wfn = psi4.energy("scf", return_wfn=True)
-        self.wfn = wfn
+        self.psi4_wfn = wfn
 
         mints = psi4.core.MintsHelper(wfn.basisset())
         ndocc = wfn.nalpha()
@@ -51,23 +51,25 @@ class CQEDRHFCalculator:
         mu_ao_x = np.asarray(mints.ao_dipole()[0])
         mu_ao_y = np.asarray(mints.ao_dipole()[1])
         mu_ao_z = np.asarray(mints.ao_dipole()[2])
+
         #mu_nuc_x, mu_nuc_y, mu_nuc_z = mol.nuclear_dipole()
         mu_nuc = np.array([mu_nuc_x, mu_nuc_y, mu_nuc_z])
 
         #mu_ao_x, mu_ao_y, mu_ao_z = [np.asarray(x) for x in mints.ao_dipole()]
         mu_ao = np.array([mu_ao_x, mu_ao_y, mu_ao_z])
 
-        l_dot_mu_el = sum(self.lambda_vector[i] * mu_ao[i] for i in range(3))
+        d_ao = sum(self.lambda_vector[i] * mu_ao[i] for i in range(3))
 
         mu_exp = np.array([
             2 * oe.contract("pq,pq->", mu_ao[i], D, optimize='optimal') for i in range(3)
         ]) + mu_nuc
 
         self.rhf_dipole_moment = mu_exp.copy()
-        l_dot_mu_nuc = sum(self.lambda_vector[i] * mu_nuc[i] for i in range(3))
-        l_dot_mu_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
+        d_nuc = sum(self.lambda_vector[i] * mu_nuc[i] for i in range(3))
+        d_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
 
-        d_c = 0.5 * l_dot_mu_nuc**2 - l_dot_mu_nuc * l_dot_mu_exp + 0.5 * l_dot_mu_exp**2
+        d_c = 0.5 * d_nuc**2 - d_nuc * d_exp + 0.5 * d_exp**2
+
         self.dipole_energy = d_c
 
         Q_ao_xx, Q_ao_xy, Q_ao_xz, Q_ao_yy, Q_ao_yz, Q_ao_zz = [np.asarray(x) for x in mints.ao_quadrupole()]
@@ -80,7 +82,8 @@ class CQEDRHFCalculator:
         Q_PF -= self.lambda_vector[0] * self.lambda_vector[2] * Q_ao_xz
         Q_PF -= self.lambda_vector[1] * self.lambda_vector[2] * Q_ao_yz
 
-        d_PF = (l_dot_mu_nuc - l_dot_mu_exp) * l_dot_mu_el
+
+        d_PF = (d_nuc - d_exp) * d_ao 
         H_0 = T + V
         H = H_0 + Q_PF 
 
@@ -101,7 +104,7 @@ class CQEDRHFCalculator:
             J = oe.contract("pqrs,rs->pq", I, D, optimize="optimal")
             K = oe.contract("prqs,rs->pq", I, D, optimize="optimal")
             
-            N = oe.contract("pr,qs,rs->pq", l_dot_mu_el, l_dot_mu_el, D, optimize="optimal")
+            N = oe.contract("pr,qs,rs->pq", d_ao, d_ao, D, optimize="optimal")
 
             F = H + 2 * J - K - N 
 
@@ -124,6 +127,25 @@ class CQEDRHFCalculator:
         else:
             psi4.core.clean()
             raise Exception("Maximum number of SCF cycles exceeded.")
+        
+        # update the dipole expectation value with the converged density matrix
+        mu_exp = np.array([
+            2 * oe.contract("pq,pq->", mu_ao[i], D, optimize='optimal') for i in range(3)
+        ]) + mu_nuc
+
+        # update d_exp
+        d_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
+        d_c = 0.5 * d_nuc**2 - d_nuc * d_exp + 0.5 * d_exp**2
+        self.dipole_energy = d_c
+        d_PF = (d_nuc - d_exp) * d_ao
+
+        # go ahead and grab the dipole and quadrupole moment gradients for later use
+        c_origin = [0.0, 0.0, 0.0]
+        max_order = 2
+        Dp4 = psi4.core.Matrix.from_array(2 * D)
+        
+        self.quad_grad = np.asarray(mints.multipole_grad(Dp4, max_order, c_origin))
+
 
         self.cqed_rhf_energy = E_scf
         self.coefficients = C
@@ -132,20 +154,23 @@ class CQEDRHFCalculator:
         self.orbital_energies = e
         self.dipole_moment = mu_exp
         self.nuclear_dipole_moment = mu_nuc
+        self.Q_PF = Q_PF
+        self.d_ao = d_ao
+        self.d_PF = d_PF
 
-        q_exp = oe.contract([2 * np.einsum("pq,pq->", Q, D, optimize="optimal") for Q in Q_ao])
-        self.quadrupole_moment = q_exp
+        #q_exp = oe.contract([2 * np.einsum("pq,pq->", Q, D, optimize="optimal") for Q in Q_ao])
+        #self.quadrupole_moment = q_exp
 
-        wfn_dict = psi4.core.Wavefunction.to_file(wfn)
-        wfn_dict['matrix']['Ca'] = np.copy(C)
-        wfn_dict['matrix']['Cb'] = np.copy(C)
-        wfn_dict['matrix']['Da'] = np.copy(D)
-        wfn_dict['matrix']['Db'] = np.copy(D)
-        wfn_dict['matrix']['Fa'] = np.copy(F)
-        wfn_dict['matrix']['Fb'] = np.copy(F)
-        wfn_dict['vector']['epsilon_a'] = np.copy(e)
-        wfn_dict['vector']['epsilon_b'] = np.copy(e)
-        self.qed_wfn = psi4.core.Wavefunction.from_file(wfn_dict)
+        #wfn_dict = psi4.core.Wavefunction.to_file(wfn)
+        #wfn_dict['matrix']['Ca'] = np.copy(C)
+        #wfn_dict['matrix']['Cb'] = np.copy(C)
+        #wfn_dict['matrix']['Da'] = np.copy(D)
+        #wfn_dict['matrix']['Db'] = np.copy(D)
+        #wfn_dict['matrix']['Fa'] = np.copy(F)
+        #wfn_dict['matrix']['Fb'] = np.copy(F)
+        #wfn_dict['vector']['epsilon_a'] = np.copy(e)
+        #wfn_dict['vector']['epsilon_b'] = np.copy(e)
+        #self.qed_wfn = psi4.core.Wavefunction.from_file(wfn_dict)
 
     def summary(self):
         print(f"RHF Energy:           {self.rhf_energy:.8f} Ha")
@@ -154,6 +179,44 @@ class CQEDRHFCalculator:
         print(f"Nuclear Repulsion:    {self.nuclear_repulsion_energy:.8f} Ha")
         print(f"Dipole Moment:        {self.dipole_moment}")
 
+    def calc_scf_gradient(self, qed_wfn=False):
+        """Calculate the SCF gradient using psi4 core functionality.
+        
+        This method requires that the wavefunction has been calculated first.
+        One can use the default wfn from a psi4 calculation or can update with cqed-rhf quantities
+
+        It returns the gradient as a numpy array.
+
+        Raises:
+            Exception: If the wavefunction has not been calculated.
+        
+        """
+        if self.psi4_wfn is None:
+            raise Exception("Wavefunction has not been calculated. Please run calc_cqed_rhf_energy() first.")
+
+        if qed_wfn:
+            # update the wavefunction with the CQED-RHF results
+            self.psi4_wfn.Ca().nph[0][:,:] = psi4.core.Matrix.from_array(self.coefficients)
+            self.psi4_wfn.Cb().nph[0][:,:] = psi4.core.Matrix.from_array(self.coefficients)
+            self.psi4_wfn.Da().nph[0][:,:] = psi4.core.Matrix.from_array(self.density_matrix)
+            self.psi4_wfn.Db().nph[0][:,:] = psi4.core.Matrix.from_array(self.density_matrix)
+            self.psi4_wfn.epsilon_a().nph[0][:] = psi4.core.Vector.from_array(self.orbital_energies)
+            self.psi4_wfn.epsilon_b().nph[0][:] = psi4.core.Vector.from_array(self.orbital_energies)
+
+            self.scf_grad = np.asarray(psi4.core.scfgrad(self.psi4_wfn))
+        else:
+            self.scf_grad = np.asarray(psi4.core.scfgrad(self.psi4_wfn))
+
+        
+        return self.scf_grad
+    
+    def calc_quadrupole_gradient(self):
+        """ Calculate the quadrupole gradient using the CQED-RHF results.
+        Returns:
+            numpy.ndarray: The quadrupole gradient as a numpy array.
+        """
+
+        print(self.quad_grad)
     def export_to_json(self, filename):
         data = {
             "RHF Energy": self.rhf_energy,
