@@ -232,9 +232,9 @@ class CQEDRHFCalculator:
                 self.o_dse_gradient[deriv_index] -= self.lambda_vector[0] * self.lambda_vector[2] * self.quad_grad[deriv_index, 5]
                 self.o_dse_gradient[deriv_index] -= self.lambda_vector[1] * self.lambda_vector[2] * self.quad_grad[deriv_index, 7]
 
-        print(self.o_dse_gradient)
+        print(self.o_dse_gradient.reshape(self.num_atoms, 3))
 
-        
+
     def export_to_json(self, filename):
         data = {
             "RHF Energy": self.rhf_energy,
