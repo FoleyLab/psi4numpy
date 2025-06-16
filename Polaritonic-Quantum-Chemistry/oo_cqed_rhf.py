@@ -147,6 +147,8 @@ class CQEDRHFCalculator:
         # compute the quadrupole contribution to the energy
         self.o_dse_energy = 2 * oe.contract("pq,pq->", Q_PF, D, optimize="optimal")
 
+        self.K_dse_energy = -1 * oe.contract("pq,pq->", N, D, optimize="optimal") 
+
         # update d_exp
         d_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
         d_c = 0.5 * d_nuc**2 - d_nuc * d_exp + 0.5 * d_exp**2
@@ -311,45 +313,39 @@ class CQEDRHFCalculator:
         Returns:
             numpy.ndarray: The numerical gradient as a numpy array.
         """
-        num_grad = np.zeros_like(self.lambda_vector)
-        original_lambda = self.lambda_vector.copy()
+        
+        # copy original molecule string
+        original_molecule_string = self.molecule_string
+        self.numerical_energy_gradient = np.zeros(self.num_atoms * 3)
+        self.numerical_o_dse_gradient = np.zeros(self.num_atoms * 3)
+        self.numerical_K_dse_gradient = np.zeros(self.num_atoms * 3)
 
-        for i in range(len(self.lambda_vector)):
-            # perturb lambda vector
-            self.lambda_vector[i] += delta
-            self.calc_cqed_rhf_energy()
-            energy_plus = self.cqed_rhf_energy
+        # converstion from Angstroms to Bohr
+        ang_to_Bohr = 1 / 0.52917721092  # convert Angstroms to Bohr
 
-            # reset lambda vector
-            self.lambda_vector[i] -= 2 * delta
-            self.calc_cqed_rhf_energy()
-            energy_minus = self.cqed_rhf_energy
 
-            # compute numerical gradient
-            num_grad[i] = (energy_plus - energy_minus) / (2 * delta)
+        for i in range(self.num_atoms):
+            for j in range(3):
+                _displacement = np.zeros((self.num_atoms, 3))
+                _displacement[i, j] = delta
+                self.molecule_string = self.modify_geometry_string(original_molecule_string, _displacement)
+                self.calc_cqed_rhf_energy()
+                energy_plus = self.cqed_rhf_energy
+                o_dse_plus = self.o_dse_energy
+                K_dse_plus = self.K_dse_energy
 
-            # reset lambda vector
-            self.lambda_vector[i] = original_lambda[i]
+                self.molecule_string = self.modify_geometry_string(original_molecule_string, -_displacement)
+                self.calc_cqed_rhf_energy()
+                energy_minus = self.cqed_rhf_energy
+                o_dse_minus = self.o_dse_energy
+                K_dse_minus = self.K_dse_energy
 
-        return num_grad
+                self.numerical_energy_gradient[i * 3 + j] = (energy_plus - energy_minus) / (2 * delta * ang_to_Bohr)
+                self.numerical_o_dse_gradient[i * 3 + j] = (o_dse_plus - o_dse_minus) / (2 * delta * ang_to_Bohr)
+                self.numerical_K_dse_gradient[i * 3 + j] = (K_dse_plus - K_dse_minus) / (2 * delta * ang_to_Bohr)
     
 
-    def export_to_json(self, filename):
-        data = {
-            "RHF Energy": self.rhf_energy,
-            "CQED-RHF Energy": self.cqed_rhf_energy,
-            "Dipole Energy": self.dipole_energy,
-            "Nuclear Repulsion Energy": self.nuclear_repulsion_energy,
-            "Dipole Moment": self.dipole_moment.tolist() if self.dipole_moment is not None else None,
-            "Nuclear Dipole Moment": self.nuclear_dipole_moment.tolist() if self.nuclear_dipole_moment is not None else None,
-            "RHF Dipole Moment": self.rhf_dipole_moment.tolist() if self.rhf_dipole_moment is not None else None,
-            "Quadrupole Moment": self.quadrupole_moment.tolist() if self.quadrupole_moment is not None else None,
-            "Orbital Energies": self.orbital_energies.tolist() if self.orbital_energies is not None else None
-        }
-        with open(filename, 'w') as f:
-            json.dump(data, f, indent=4)
-
-    def modify_geometry_string(geometry_string, displacement_array):
+    def modify_geometry_string(self, geometry_string, displacement_array):
         """
         Extracts Cartesian coordinates from a Psi4 geometry string, applies a
         transformation function to the coordinates, and returns a new geometry string.
@@ -406,4 +402,20 @@ class CQEDRHFCalculator:
         new_geometry_string += "\nsymmetry c1"
 
         return f"""{new_geometry_string}"""
+    
 
+
+    def export_to_json(self, filename):
+        data = {
+            "RHF Energy": self.rhf_energy,
+            "CQED-RHF Energy": self.cqed_rhf_energy,
+            "Dipole Energy": self.dipole_energy,
+            "Nuclear Repulsion Energy": self.nuclear_repulsion_energy,
+            "Dipole Moment": self.dipole_moment.tolist() if self.dipole_moment is not None else None,
+            "Nuclear Dipole Moment": self.nuclear_dipole_moment.tolist() if self.nuclear_dipole_moment is not None else None,
+            "RHF Dipole Moment": self.rhf_dipole_moment.tolist() if self.rhf_dipole_moment is not None else None,
+            "Quadrupole Moment": self.quadrupole_moment.tolist() if self.quadrupole_moment is not None else None,
+            "Orbital Energies": self.orbital_energies.tolist() if self.orbital_energies is not None else None
+        }
+        with open(filename, 'w') as f:
+            json.dump(data, f, indent=4)
