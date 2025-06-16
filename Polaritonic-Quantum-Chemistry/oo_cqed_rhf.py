@@ -350,60 +350,60 @@ class CQEDRHFCalculator:
             json.dump(data, f, indent=4)
 
     def modify_geometry_string(geometry_string, displacement_array):
-    """
-    Extracts Cartesian coordinates from a Psi4 geometry string, applies a
-    transformation function to the coordinates, and returns a new geometry string.
+        """
+        Extracts Cartesian coordinates from a Psi4 geometry string, applies a
+        transformation function to the coordinates, and returns a new geometry string.
 
-    Args:
-        geometry_string (str): A Psi4 molecular geometry string.
-        transformation_function (callable): A function that takes a NumPy
-            array of Cartesian coordinates (N x 3) as input and returns a
-            NumPy array of the same shape with the transformed coordinates.
+        Args:
+            geometry_string (str): A Psi4 molecular geometry string.
+            transformation_function (callable): A function that takes a NumPy
+                array of Cartesian coordinates (N x 3) as input and returns a
+                NumPy array of the same shape with the transformed coordinates.
 
-    Returns:
-        str: A new Psi4 molecular geometry string with the transformed coordinates.
-    """
-    lines = geometry_string.strip().split('\n')
-    atom_data = []
-    symmetry = None
+        Returns:
+            str: A new Psi4 molecular geometry string with the transformed coordinates.
+        """
+        lines = geometry_string.strip().split('\n')
+        atom_data = []
+        symmetry = None
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line.lower().startswith("symmetry"):
-            symmetry = line
-            continue
-        parts = line.split()
-        if len(parts) == 4:
-            atom = parts[0]
-            try:
-                x, y, z = map(float, parts[1:])
-                atom_data.append([atom, x, y, z])
-            except ValueError:
-                # Handle cases where the line might not be atom coordinates
-                pass
-    if not atom_data:
-        return ""
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if line.lower().startswith("symmetry"):
+                symmetry = line
+                continue
+            parts = line.split()
+            if len(parts) == 4:
+                atom = parts[0]
+                try:
+                    x, y, z = map(float, parts[1:])
+                    atom_data.append([atom, x, y, z])
+                except ValueError:
+                    # Handle cases where the line might not be atom coordinates
+                    pass
+        if not atom_data:
+            return ""
 
-    coordinates = np.array([[data[1], data[2], data[3]] for data in atom_data])
+        coordinates = np.array([[data[1], data[2], data[3]] for data in atom_data])
 
-    # Apply the transformation function
-    transformed_coordinates = displacement_array  + coordinates
+        # Apply the transformation function
+        transformed_coordinates = displacement_array  + coordinates
 
-    new_geometry_lines = []
-    for i, data in enumerate(atom_data):
-        atom = data[0]
-        new_geometry_lines.append(f"{atom} {transformed_coordinates[i, 0]:.8f} {transformed_coordinates[i, 1]:.8f} {transformed_coordinates[i, 2]:.8f}")
+        new_geometry_lines = []
+        for i, data in enumerate(atom_data):
+            atom = data[0]
+            new_geometry_lines.append(f"{atom} {transformed_coordinates[i, 0]:.8f} {transformed_coordinates[i, 1]:.8f} {transformed_coordinates[i, 2]:.8f}")
 
-    new_geometry_string = "\n".join(new_geometry_lines)
-    #if symmetry:
-    #    new_geometry_string += f"\n{symmetry}"
+        new_geometry_string = "\n".join(new_geometry_lines)
+        #if symmetry:
+        #    new_geometry_string += f"\n{symmetry}"
 
-    # Add the "no_reorient" and "no_com" lines
-    new_geometry_string += "\nno_reorient\nno_com"
-    # Add the "symmetry c1" line
-    new_geometry_string += "\nsymmetry c1"
+        # Add the "no_reorient" and "no_com" lines
+        new_geometry_string += "\nno_reorient\nno_com"
+        # Add the "symmetry c1" line
+        new_geometry_string += "\nsymmetry c1"
 
-    return f"""{new_geometry_string}"""
+        return f"""{new_geometry_string}"""
 
