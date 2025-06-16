@@ -144,6 +144,9 @@ class CQEDRHFCalculator:
             2 * oe.contract("pq,pq->", mu_ao[i], D, optimize='optimal') for i in range(3)
         ]) + mu_nuc
 
+        # compute the quadrupole contribution to the energy
+        self.o_dse_energy = 2 * oe.contract("pq,pq->", Q_PF, D, optimize="optimal")
+
         # update d_exp
         d_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
         d_c = 0.5 * d_nuc**2 - d_nuc * d_exp + 0.5 * d_exp**2
@@ -297,8 +300,39 @@ class CQEDRHFCalculator:
                 self.K_dse_gradient[deriv_index] += self.lambda_vector[2] ** 2 * tmp_z[deriv_index, 2]
 
 
+    def calc_numerical_gradient(self, delta=1.0e-5):
+        """Calculate the numerical gradient of the CQED-RHF energy with respect to the lambda vector.
+        
+        This method uses finite differences to compute the gradient.
+        
+        Args:
+            delta (float): The step size for finite differences. Default is 1.0e-5.
+        
+        Returns:
+            numpy.ndarray: The numerical gradient as a numpy array.
+        """
+        num_grad = np.zeros_like(self.lambda_vector)
+        original_lambda = self.lambda_vector.copy()
 
+        for i in range(len(self.lambda_vector)):
+            # perturb lambda vector
+            self.lambda_vector[i] += delta
+            self.calc_cqed_rhf_energy()
+            energy_plus = self.cqed_rhf_energy
 
+            # reset lambda vector
+            self.lambda_vector[i] -= 2 * delta
+            self.calc_cqed_rhf_energy()
+            energy_minus = self.cqed_rhf_energy
+
+            # compute numerical gradient
+            num_grad[i] = (energy_plus - energy_minus) / (2 * delta)
+
+            # reset lambda vector
+            self.lambda_vector[i] = original_lambda[i]
+
+        return num_grad
+    
 
     def export_to_json(self, filename):
         data = {
@@ -314,4 +348,62 @@ class CQEDRHFCalculator:
         }
         with open(filename, 'w') as f:
             json.dump(data, f, indent=4)
+
+    def modify_geometry_string(geometry_string, displacement_array):
+    """
+    Extracts Cartesian coordinates from a Psi4 geometry string, applies a
+    transformation function to the coordinates, and returns a new geometry string.
+
+    Args:
+        geometry_string (str): A Psi4 molecular geometry string.
+        transformation_function (callable): A function that takes a NumPy
+            array of Cartesian coordinates (N x 3) as input and returns a
+            NumPy array of the same shape with the transformed coordinates.
+
+    Returns:
+        str: A new Psi4 molecular geometry string with the transformed coordinates.
+    """
+    lines = geometry_string.strip().split('\n')
+    atom_data = []
+    symmetry = None
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.lower().startswith("symmetry"):
+            symmetry = line
+            continue
+        parts = line.split()
+        if len(parts) == 4:
+            atom = parts[0]
+            try:
+                x, y, z = map(float, parts[1:])
+                atom_data.append([atom, x, y, z])
+            except ValueError:
+                # Handle cases where the line might not be atom coordinates
+                pass
+    if not atom_data:
+        return ""
+
+    coordinates = np.array([[data[1], data[2], data[3]] for data in atom_data])
+
+    # Apply the transformation function
+    transformed_coordinates = displacement_array  + coordinates
+
+    new_geometry_lines = []
+    for i, data in enumerate(atom_data):
+        atom = data[0]
+        new_geometry_lines.append(f"{atom} {transformed_coordinates[i, 0]:.8f} {transformed_coordinates[i, 1]:.8f} {transformed_coordinates[i, 2]:.8f}")
+
+    new_geometry_string = "\n".join(new_geometry_lines)
+    #if symmetry:
+    #    new_geometry_string += f"\n{symmetry}"
+
+    # Add the "no_reorient" and "no_com" lines
+    new_geometry_string += "\nno_reorient\nno_com"
+    # Add the "symmetry c1" line
+    new_geometry_string += "\nsymmetry c1"
+
+    return f"""{new_geometry_string}"""
 
