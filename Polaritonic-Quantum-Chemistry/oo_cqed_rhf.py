@@ -56,6 +56,13 @@ class CQEDRHFCalculator:
         mu_ao_y = np.asarray(mints.ao_dipole()[1])
         mu_ao_z = np.asarray(mints.ao_dipole()[2])
 
+        # electronic dipole moment in SO basis
+        self.dipole_so_x = np.asarray(mints.so_dipole()[0])
+        self.dipole_so_y = np.asarray(mints.so_dipole()[1])
+        self.dipole_so_z = np.asarray(mints.so_dipole()[2])
+
+
+
         #mu_nuc_x, mu_nuc_y, mu_nuc_z = mol.nuclear_dipole()
         mu_nuc = np.array([mu_nuc_x, mu_nuc_y, mu_nuc_z])
 
@@ -146,9 +153,12 @@ class CQEDRHFCalculator:
         # go ahead and grab the dipole and quadrupole moment gradients for later use
         c_origin = [0.0, 0.0, 0.0]
         max_order = 2
-        Dp4 = psi4.core.Matrix.from_array(2 * D)
+
+        # symmetrization step
+        D = 0.5 * (D + oe.contract("rs->sr", D, optimize="optimal"))
+        Dp4 = psi4.core.Matrix.from_array( D )
         
-        self.quad_grad = np.asarray(mints.multipole_grad(Dp4, max_order, c_origin))
+        self.multipole_grad = np.asarray(mints.multipole_grad(Dp4, max_order, c_origin))
 
 
         self.cqed_rhf_energy = E_scf
@@ -225,14 +235,69 @@ class CQEDRHFCalculator:
             for cart_index in range(3):
                 deriv_index = 3 * atom_index + cart_index
 
-                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[0] ** 2 * self.quad_grad[deriv_index, 3]
-                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[1] ** 2 * self.quad_grad[deriv_index, 6]
-                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[2] ** 2 * self.quad_grad[deriv_index, 8]
-                self.o_dse_gradient[deriv_index] -= self.lambda_vector[0] * self.lambda_vector[1] * self.quad_grad[deriv_index, 4]
-                self.o_dse_gradient[deriv_index] -= self.lambda_vector[0] * self.lambda_vector[2] * self.quad_grad[deriv_index, 5]
-                self.o_dse_gradient[deriv_index] -= self.lambda_vector[1] * self.lambda_vector[2] * self.quad_grad[deriv_index, 7]
+                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[0] ** 2 * self.multipole_grad[deriv_index, 3]
+                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[1] ** 2 * self.multipole_grad[deriv_index, 6]
+                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[2] ** 2 * self.multipole_grad[deriv_index, 8]
+                self.o_dse_gradient[deriv_index] -= self.lambda_vector[0] * self.lambda_vector[1] * self.multipole_grad[deriv_index, 4]
+                self.o_dse_gradient[deriv_index] -= self.lambda_vector[0] * self.lambda_vector[2] * self.multipole_grad[deriv_index, 5]
+                self.o_dse_gradient[deriv_index] -= self.lambda_vector[1] * self.lambda_vector[2] * self.multipole_grad[deriv_index, 7]
 
         print(self.o_dse_gradient.reshape(self.num_atoms, 3))
+
+
+    def calc_dipole_dipole_gradient(self):
+        """ Calculate the dipole-dipole gradient using the CQED-RHF results.
+        Returns:
+            numpy.ndarray: The dipole-dipole gradient as a numpy array.
+        """
+        # instantiate mints
+        mints = psi4.core.MintsHelper(self.psi4_wfn.basisset())
+
+        self.K_dse_gradient = np.zeros(3 * self.num_atoms)
+
+        # get the x, y, and z components of exchange contribution
+        Da = self.density_matrix
+        Db = self.density_matrix
+
+        # D(p,q) = - mu(r,s) [ Da(p,r)Da(s,q) + Db(p,r) Da(s,q) ] ####
+        # these are the density matrices contracted with the different dipole components
+        tmp_a_x = -oe.contract("rs, pr, sq -> pq", self.dipole_so_x, Da, Da, optimize="optimal")
+        tmp_a_y = -oe.contract("rs, pr, sq -> pq", self.dipole_so_y, Da, Da, optimize="optimal")
+        tmp_a_z = -oe.contract("rs, pr, sq -> pq", self.dipole_so_z, Da, Da, optimize="optimal")
+        tmp_b_x = -oe.contract("rs, pr, sq -> pq", self.dipole_so_x, Db, Da, optimize="optimal")
+        tmp_b_y = -oe.contract("rs, pr, sq -> pq", self.dipole_so_y, Db, Da, optimize="optimal")
+        tmp_b_z = -oe.contract("rs, pr, sq -> pq", self.dipole_so_z, Db, Da, optimize="optimal")
+
+        # sum together the components 
+        D_x = tmp_a_x + tmp_b_x
+        D_y = tmp_a_y + tmp_b_y
+        D_z = tmp_a_z + tmp_b_z
+
+        # symmetrize D
+        D_x = 0.5 * (D_x + oe.contract("rs->sr", D_x, optimize="optimal"))
+        D_y = 0.5 * (D_y + oe.contract("rs->sr", D_y, optimize="optimal"))
+        D_z = 0.5 * (D_z + oe.contract("rs->sr", D_z, optimize="optimal"))
+
+        # cast as psi4 arrays
+        Dp4_x = psi4.core.Matrix.from_array(D_x)
+        Dp4_y = psi4.core.Matrix.from_array(D_y)
+        Dp4_z = psi4.core.Matrix.from_array(D_z)
+
+        # get the dipole-dipole gradient
+        tmp_x = np.asarray(mints.dipole_grad(Dp4_x))
+        tmp_y = np.asarray(mints.dipole_grad(Dp4_y))
+        tmp_z = np.asarray(mints.dipole_grad(Dp4_z))
+
+        # loop over atoms
+        for atom in range(self.num_atoms):
+            for cart in range(3):
+                deriv_index = 3 * atom + cart
+
+                # calculate the gradient components
+                self.K_dse_gradient[deriv_index] += self.lambda_vector[2] ** 2 * tmp_z[deriv_index, 2]
+
+
+
 
 
     def export_to_json(self, filename):
