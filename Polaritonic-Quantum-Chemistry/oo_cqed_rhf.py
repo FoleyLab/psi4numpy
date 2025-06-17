@@ -250,6 +250,8 @@ class CQEDRHFCalculator:
         return self.scf_grad
     
     def hilber_quadrupole_gradient(self):
+        # instantiate mints
+        mints = psi4.core.MintsHelper(self.psi4_wfn.basisset())
         C_origin = [0.0, 0.0, 0.0] # origin
         maxorder = 2 # quadrupole
         D = self.density_matrix * 2
