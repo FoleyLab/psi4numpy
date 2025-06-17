@@ -381,7 +381,6 @@ class CQEDRHFCalculator:
 
         # initialize three arrays for the K_dse terms
         d_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
-        d_matrix = np.zeros((n_orbitals, n_orbitals))
         K_dse_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         K_dse_gradient = np.zeros(3 * n_atoms)
 
@@ -389,20 +388,7 @@ class CQEDRHFCalculator:
         #dipole_derivs = np.asarray(mints.ao_elec_dip_deriv1())
         
 
-        # get the dipole integrals
-        d_matrix = self.lambda_vector[0] * np.asarray(mints.ao_dipole()[0])
-        print("x contribution of d matrix")
-        print(d_matrix)
-        d_matrix += self.lambda_vector[1] * np.asarray(mints.ao_dipole()[1])
-        print("y contribution of d matrix")
-        print(d_matrix)
-        d_matrix += self.lambda_vector[2] * np.asarray(mints.ao_dipole()[2])
-        print("z contribution of d matrix")
-        print(d_matrix)
-
-        #print("The shape of dipole_derivs is ",np.shape(dipole_derivs))
-        print("The shape of d_matrix is ", np.shape(d_matrix))
-
+        d_matrix = self.d_ao
 
         # need to think if this should be multiplied by 2 for alpha and beta!!!                                    
         D = self.density_matrix
@@ -421,15 +407,18 @@ class CQEDRHFCalculator:
                 elif cart_index == 1:
                     d_derivs[deriv_index] += self.lambda_vector[0] * _dip_deriv[1] + self.lambda_vector[1] * _dip_deriv[4] + self.lambda_vector[2] * _dip_deriv[7]
 
-                else:
+                elif cart_index == 2:
                     d_derivs[deriv_index] += self.lambda_vector[0] * _dip_deriv[2] + self.lambda_vector[1] * _dip_deriv[5] + self.lambda_vector[2] * _dip_deriv[8]
 
+                else:
+                    raise ValueError("cart_index must be 0, 1, or 2.")
             
 
                 # add code to contract d_derivs * d_matrix with D to get K_deriv, K^dse_uv = -1 sum_ls * d'_us * dlv D_ls
                 K_dse_deriv[deriv_index] = -1 * oe.contract("us,lv,ls->uv", d_derivs[deriv_index, :, :], d_matrix, D, optimize="optimal")
-
-                K_dse_gradient[deriv_index] = oe.contract("uv, uv->", D, K_dse_deriv[deriv_index, :, :], optimize="optimal")
+                
+                # we only performed this for Da Da, we need to multiply by 2 to account for the beta density matrix
+                K_dse_gradient[deriv_index] = 2 * oe.contract("uv, uv->", D, K_dse_deriv[deriv_index, :, :], optimize="optimal")
 
         # add code to return the J_gradient and K_gradient
         return K_dse_gradient
