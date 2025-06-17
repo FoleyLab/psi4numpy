@@ -176,8 +176,10 @@ class CQEDRHFCalculator:
         self.cqed_rhf_energy = E_scf
         self.coefficients = C
         self.density_matrix = D
-        self.fock_matrix = F
-        self.canonical_fock_matrix = F_can
+        self.fock_matrix_ao = F
+        self.canonical_fock_matrix_ao = F_can
+        self.canonical_fock_matrix_mo = C.T @ F_can  @ C
+        self.fock_matrix_mo = C.T @ F @ C
         self.orbital_energies = e
         self.dipole_moment = mu_exp
         self.nuclear_dipole_moment = mu_nuc
@@ -562,8 +564,8 @@ class CQEDRHFCalculator:
 
                 # Get overlap derivatives for this atom and Cartesian component
                 overlap_derivs[deriv_index, :, :] = np.asarray(mints.mo_oei_deriv1("OVERLAP", atom_index, C, C)[cart_index])
-                self.canonical_overlap_gradient[deriv_index] = -2.0 * oe.contract('ii,ii->', self.canonical_fock_matrix[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal')
-                self.overlap_gradient[deriv_index] = -2.0 * oe.contract('ii,ii->', self.fock_matrix[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal') 
+                self.canonical_overlap_gradient[deriv_index] = -2.0 * oe.contract('ii,ii->', self.canonical_fock_matrix_mo[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal')
+                self.overlap_gradient[deriv_index] = -2.0 * oe.contract('ii,ii->', self.fock_matrix_mo[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal') 
 
 
     def compute_one_electron_integral_gradient_terms(self):
