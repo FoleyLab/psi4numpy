@@ -249,6 +249,32 @@ class CQEDRHFCalculator:
         
         return self.scf_grad
     
+    def hilber_quadrupole_gradient(self):
+        C_origin = [0.0, 0.0, 0.0] # origin
+        maxorder = 2 # quadrupole
+        D = self.density_matrix * 2
+        natom = self.num_atoms
+        lambda_z = self.lambda_vector[2] # z-component of lambda vector
+        
+        # symmetrize D because dipole_grad only uses 1/2 the elements
+        D = 0.5 * ( D + np.einsum('rs->sr',D) )
+        D = psi4.core.Matrix.from_array(D)
+        
+        # 3N x 9 matrix of quadrupole derivatives
+        quad_grad = np.asarray(mints.multipole_grad(D, maxorder, C_origin))
+        
+        # get requested component of quadrupole gradient
+        zzdir = 8 # zz component
+
+        # unpack zz-component 3N x 3 matrix (the 9th column)
+        dse_gradient_zz = np.zeros((natom,3))
+        for atom in range (0,natom):
+            for cart in range (0,3):
+                dse_gradient_zz[atom,cart] = quad_grad[atom*3+cart,zzdir]
+        
+        self.hilbert_o_dse = dse_gradient_zz * -0.5 * lambda_z * lambda_z
+
+    
     def calc_quadrupole_gradient(self):
         """ Calculate the quadrupole gradient using the CQED-RHF results.
         Returns:
