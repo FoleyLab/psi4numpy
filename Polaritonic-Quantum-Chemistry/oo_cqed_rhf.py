@@ -496,6 +496,420 @@ class CQEDRHFCalculator:
     
 
 
+def compute_nuclear_repulsion_gradient(geometry_string):
+    """
+    Method to compute the nuclear repulsion gradient
+
+    Arguments
+    ---------
+    geometry_string : str
+        psi4 molecule string
+
+    The nuclear repulsion gradient only depends on the atom identities and positions
+    """
+    # Define your molecular geometry
+    molecule = psi4.geometry(geometry_string)
+
+    # get the nuclear repulsion gradient
+    nuclear_repulsion_gradient = np.asarray(molecule.nuclear_repulsion_energy_deriv1())
+    
+    return nuclear_repulsion_gradient
+
+    # Compute the nuclear repulsion gradient using the starting_string
+    #nuclear_repulsion_gradient = compute_nuclear_repulsion_gradient(starting_string)
+    #print("Nuclear Repulsion Gradient:\n", nuclear_repulsion_gradient)
+
+
+    # Compare the computed nuclear repulsion gradient with the expected value
+    #if np.allclose(nuclear_repulsion_gradient, _expected_nuclear_gradient):
+    #    print("Nuclear repulsion gradient is correct.")
+    #else:
+    ##    print("Nuclear repulsion gradient is incorrect.")
+    #    print("Computed:\n", nuclear_repulsion_gradient)
+    #    print("Expected:\n", _expected_nuclear_gradient)
+
+def compute_fock_matrix_term(geometry_string, basis_set='sto-3g', method='scf', qed=False, lambda_list=[0, 0, 0]):
+    """
+    Method to compute the Fock matrix
+
+    Arguments
+    ---------
+
+    geometry_string : str
+        psi4 molecule string
+
+    basis_set : str
+        basis set to use for the calculation, defaults to 'sto-3g'
+
+    method : str
+        quantum chemistry method to use for the calculation, defaults to 'scf'
+
+    The Fock matrix is the matrix representation of the Fock operator, which is used in Hartree-Fock calculations.
+    To compute the Fock matrix in the MO basis, we need the one-electron and two-electron integrals and the density matrix.
+    We will get these from a converged Hartree-Fock calculation.
+    """
+
+    # set up the molecule
+    molecule = psi4.geometry(geometry_string)
+
+    # Set up Psi4 options
+    options_dict = {
+        'basis': basis_set,
+        'scf_type': 'pk',
+        'e_convergence': 1e-8,
+        'd_convergence': 1e-8,
+    }
+    psi4.set_options(options_dict)
+
+    # set up the geometry
+    psi4.geometry(geometry_string)
+    
+    if qed:
+        pqed_dict = cqed_rhf(lambda_list, geometry_string, options_dict)
+        rhf_e = pqed_dict["CQED-RHF ENERGY"]
+        wfn = pqed_dict["CQED-RHF WFN"]
+        
+        # get the number of orbitals and the number of doubly occupied orbitals
+        n_orbitals = wfn.nmo()
+        n_docc = wfn.nalpha()
+
+        # Get QED-Fock matrix from pqed_dict
+        F = pqed_dict["CQED-RHF FOCK"]
+        
+        # instantiate the MintsHelper object
+        mints = psi4.core.MintsHelper(wfn.basisset())
+
+        C = wfn.Ca() # -> as psi4 matrix object
+        Cnp = np.asarray(C)
+
+        # transform F_ao to the MO basis
+        F = np.einsum('uj, vi, uv', Cnp, Cnp, F)
+        
+    
+    else:
+        rhf_e, wfn = psi4.energy(method, return_wfn=True)
+
+        # get the number of orbitals and the number of doubly occupied orbitals
+        n_orbitals = wfn.nmo()
+        n_docc = wfn.nalpha()
+
+        ### NOTE! the wfn object has the Fock matrix (Fa and Fb), we can 
+        ### Just grab it instead of building it again.  We need to 
+        ### remember that it is stored as a psi4 matrix object, so we need to
+        ### turn it into a numpy array before we use it!
+        
+        # get the orbital transformation matrix
+        C = wfn.Ca() # -> as psi4 matrix object
+        Cnp = np.asarray(C) # -> as numpy array
+    
+    
+        # instantiate the MintsHelper object
+        mints = psi4.core.MintsHelper(wfn.basisset())
+    
+        # get the one-electron integrals
+        H_ao = np.asarray(mints.ao_kinetic()) + np.asarray(mints.ao_potential())
+    
+        # transform H_ao to the MO basis
+        H_mo = np.einsum('uj, vi, uv', Cnp, Cnp, H_ao)
+    
+        # get the two-electron integrals, use psi4 to transform into the MO basis because that is more efficient
+        ERI =  np.asarray(mints.mo_eri(C, C, C, C))
+    
+        # Build the Fock matrix
+        F = H_mo + 2 * np.einsum("ijkk->ij", ERI[:, :, :n_docc, :n_docc]) 
+        F -= np.einsum("ikkj->ij", ERI[:, :n_docc, :n_docc, :] )
+
+    # get number of atoms
+    n_atoms = molecule.natom()
+
+    # now compute the overlap gradient and contract with Fock matrix
+    overlap_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+    overlap_gradient = np.zeros(3 * n_atoms)
+    for atom_index in range(n_atoms):
+    # now compute the overlap gradient and contract with Fock matrix
+    overlap_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+    overlap_gradient = np.zeros(3 * n_atoms)
+    for atom_index in range(n_atoms):
+
+        # Derivatives with respect to x, y, and z of the current atom
+        for cart_index in range(3):
+            deriv_index = 3 * atom_index + cart_index
+            # Get overlap derivatives for this atom and Cartesian component
+            overlap_derivs[deriv_index, :, :] = np.asarray(mints.mo_oei_deriv1("OVERLAP", atom_index, C, C)[cart_index])
+            overlap_gradient[deriv_index] = -2.0 * np.einsum('ii,ii->', F[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc])
+
+    return overlap_gradient
+
+def compute_one_electron_integral_gradient_terms(geometry_string, basis_set='sto-3g', method='scf', qed=False, lambda_list=[0, 0, 0]):
+    """
+    NEEDS COMPLETING: Method to compute the one-electron integral gradient terms
+
+    Arguments
+    ---------
+    geometry_string : str
+        psi4 molecule string
+
+    basis_set : str
+        basis set to use for the calculation, defaults to 'sto-3g'
+
+    method : str
+        quantum chemistry method to use for the calculation, defaults to 'scf'
+
+    The one-electron integral gradient terms are the derivatives of the one-electron integrals with respect to the nuclear coordinates.
+    To compute the one-electron integral gradient terms, we need the one-electron integrals and the nuclear repulsion gradient.
+    We will get these from a converged Hartree-Fock calculation.
+    """
+    # set up the molecule
+    molecule = psi4.geometry(geometry_string)
+    
+    options_dict = {
+        'basis': basis_set,
+        'scf_type': 'pk',
+        'e_convergence': 1e-8,
+        'd_convergence': 1e-8,
+    }
+    
+    # Set up Psi4 options
+    psi4.set_options(options_dict)
+
+    # set up the geometry
+    psi4.geometry(geometry_string)
+
+    if qed:
+        pqed_dict = cqed_rhf(lambda_list, geometry_string, options_dict)
+        rhf_e = pqed_dict["CQED-RHF ENERGY"]
+        wfn = pqed_dict["CQED-RHF WFN"]
+    
+    else:
+        rhf_e, wfn = psi4.energy(method, return_wfn=True)
+
+    # get the number of orbitals and the number of doubly occupied orbitals
+    n_orbitals = wfn.nmo()
+    n_docc = wfn.nalpha()
+
+    # get the number of atoms
+    n_atoms = molecule.natom()
+
+    # get the orbital transformation matrix
+    C = wfn.Ca() # -> as psi4 matrix object
+    Cnp = np.asarray(C) # -> as numpy array
+
+    # get the Density matrix by summing over the occupied orbital transformation matrix
+    Cocc = Cnp[:, :n_docc]
+
+    # define density matrix as 2 * sum_i C_pi C_qi
+    D = 2 * np.einsum("pi,qi->pq", Cocc, Cocc) # [Szabo:1996] Eqn. 3.145, pp. 139
+
+    # cast as psi4 matrix object
+    Dp4 = psi4.core.Matrix.from_array(D)
+
+    # instantiate the MintsHelper object
+    mints = psi4.core.MintsHelper(wfn.basisset())
+
+    # initialize the one-electron integrals derivative matrices
+    kinetic_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+    potential_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+    
+
+    kinetic_gradient = np.zeros(3 * n_atoms)
+    potential_gradient = np.zeros(3 * n_atoms)
+
+    o_dse_grad = np.zeros(3 * n_atoms)
+
+    # get the quadrupole gradient
+    c_origin = [0.0, 0.0, 0.0]
+
+    max_order = 2
+
+    # shape of this guy will be (3 * n_atom, 9)
+    quad_grad = np.asarray(mints.multipole_grad(Dp4, max_order, c_origin))
+
+    # loop over atoms and cartesian components
+    if qed:
+        for atom_index in range(n_atoms):
+            for cart_index in range(3):
+                deriv_index = 3 * atom_index + cart_index
+                ## xx component
+                o_dse_grad[deriv_index] -= 0.5 * lambda_list[0] * lambda_list[0] * quad_grad[deriv_index,3]
+                ## xy component
+                o_dse_grad[deriv_index] -= 1.0 * lambda_list[0] * lambda_list[1] * quad_grad[deriv_index,4]
+                # xz component
+                o_dse_grad[deriv_index] -= 1.0 * lambda_list[0] * lambda_list[2] * quad_grad[deriv_index,5] 
+                # yy component
+                o_dse_grad[deriv_index] -= 0.5 * lambda_list[1] * lambda_list[1] * quad_grad[deriv_index,6] 
+                # yz component
+                o_dse_grad[deriv_index] -= 1.0 * lambda_list[1] * lambda_list[2] * quad_grad[deriv_index,7]
+                # zz component
+                o_dse_grad[deriv_index] -= 0.5 * lambda_list[2] * lambda_list[2] * quad_grad[deriv_index,8]
+    
+
+
+    # loop over all of the atoms
+    for atom_index in range(n_atoms):
+        # Derivatives with respect to x, y, and z of the current atom
+         for cart_index in range(3):
+            deriv_index = 3 * atom_index + cart_index
+
+            # get the one-electron integral derivatives
+            kinetic_derivs[deriv_index] = np.asarray(mints.ao_oei_deriv1("KINETIC", atom_index)[cart_index])
+            potential_derivs[deriv_index] = np.asarray(mints.ao_oei_deriv1("POTENTIAL", atom_index)[cart_index])
+
+            # add code to contract kinetic_derivs with D
+            kinetic_gradient[deriv_index] = np.einsum("uv,uv->", D, kinetic_derivs[deriv_index, :, :])
+
+            # add code to contract potential_derivs with D
+            potential_gradient[deriv_index] = np.einsum("uv,uv->", D, potential_derivs[deriv_index, :, :])
+
+    
+    # add code to return the kinet_gradient and potential_gradient
+    return kinetic_gradient, potential_gradient, o_dse_grad
+
+
+def compute_two_electron_integral_gradient_terms(geometry_string, basis_set='sto-3g', method='scf', qed=False, lambda_list=[0, 0, 0]):
+    """
+    NEEDS COMPLETING: Method to compute the two-electron integral gradient terms
+
+    Arguments
+    ---------
+    geometry_string : str
+        psi4 molecule string
+
+    basis_set : str
+        basis set to use for the calculation, defaults to 'sto-3g'
+
+    method : str
+        quantum chemistry method to use for the calculation, defaults to 'scf'
+
+    The two-electron integral gradient terms are the derivatives of the two-electron integrals with respect to the nuclear coordinates.
+    To compute the two-electron integral gradient terms, we need the two-electron integrals and the nuclear repulsion gradient.
+    We will get these from a converged Hartree-Fock calculation.
+    """
+    # set up the molecule
+    molecule = psi4.geometry(geometry_string)
+    
+    # Set up Psi4 options
+    options_dict = {
+        'basis': basis_set,
+        'scf_type': 'pk',
+        'e_convergence': 1e-8,
+        'd_convergence': 1e-8,
+    }
+
+    # add print statement for lambda_list
+    print("!!!! Lambda List is !!!!!")
+    print(lambda_list)
+    
+    # Set up Psi4 options
+    psi4.set_options(options_dict)
+
+    # set up the geometry
+    psi4.geometry(geometry_string)
+
+    if qed:
+        pqed_dict = cqed_rhf(lambda_list, geometry_string, options_dict)
+        rhf_e = pqed_dict["CQED-RHF ENERGY"]
+        wfn = pqed_dict["CQED-RHF WFN"]
+    
+    else:
+        rhf_e, wfn = psi4.energy(method, return_wfn=True)
+
+    # get the number of orbitals and the number of doubly occupied orbitals
+    n_orbitals = wfn.nmo()
+    n_docc = wfn.nalpha()
+
+    # get the number of atoms
+    n_atoms = molecule.natom()
+
+    # get the orbital transformation matrix
+    C = wfn.Ca() # -> as psi4 matrix object
+    Cnp = np.asarray(C) # -> as numpy array
+
+    # get the Density matrix by summing over the occupied orbital transformation matrix
+    Cocc = Cnp[:, :n_docc]
+
+    # define D = 2 * sum_i C_pi * C_qi
+    D = 2 * np.einsum("pi,qi->pq", Cocc, Cocc)  # [Szabo:1996] Eqn. 3.145, pp. 139
+
+    # instantiate the MintsHelper object
+    mints = psi4.core.MintsHelper(wfn.basisset())
+
+    # initialize the two-electron integrals derivative matrices
+    eri_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals, n_orbitals, n_orbitals))
+    J_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+    K_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+    J_gradient = np.zeros(3 * n_atoms)
+    K_gradient = np.zeros(3 * n_atoms)
+
+    # initialize three arrays for the K_dse terms
+    dipole_derivs = np.zeros((3 * n_atoms, 3, n_orbitals, n_orbitals))
+    d_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+    d_matrix = np.zeros((n_orbitals, n_orbitals))
+    K_dse_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+    K_dse_gradient = np.zeros(3 * n_atoms)
+
+    # get the dipole integral derivatives
+    #dipole_derivs = np.asarray(mints.ao_elec_dip_deriv1())
+    
+
+    # get the dipole integrals
+    d_matrix = lambda_list[0] * np.asarray(mints.ao_dipole()[0])
+    print("x contribution of d matrix")
+    print(d_matrix)
+    d_matrix += lambda_list[1] * np.asarray(mints.ao_dipole()[1])
+    print("y contribution of d matrix")
+    print(d_matrix)
+    d_matrix += lambda_list[2] * np.asarray(mints.ao_dipole()[2])
+    print("z contribution of d matrix")
+    print(d_matrix)
+
+    #print("The shape of dipole_derivs is ",np.shape(dipole_derivs))
+    print("The shape of d_matrix is ", np.shape(d_matrix))
+                                           
+    
+
+    # loop over all of the atoms
+    for atom_index in range(n_atoms):
+        # Derivatives with respect to x, y, and z of the current atom
+        _dip_deriv = np.asarray(mints.ao_elec_dip_deriv1(atom_index))
+        for cart_index in range(3):
+            deriv_index = 3 * atom_index + cart_index
+
+            # get element of d_deriv:
+            if cart_index == 0:
+                d_derivs[deriv_index] += lambda_list[0] * _dip_deriv[0] + lambda_list[1] * _dip_deriv[3] + lambda_list[2] * _dip_deriv[6]
+
+            elif cart_index == 1:
+                d_derivs[deriv_index] += lambda_list[0] * _dip_deriv[1] + lambda_list[1] * _dip_deriv[4] + lambda_list[2] * _dip_deriv[7]
+
+            else:
+                d_derivs[deriv_index] += lambda_list[0] * _dip_deriv[2] + lambda_list[1] * _dip_deriv[5] + lambda_list[2] * _dip_deriv[8]
+
+            
+
+            # get the two-electron integral derivatives
+            eri_derivs[deriv_index] = np.asarray(mints.ao_tei_deriv1(atom_index)[cart_index])
+
+            # add code to contract eri_derivs with D to get J_deriv. J_uv = 2 * sum_ls (uv|ls) D_ls 
+            J_deriv[deriv_index] = np.einsum("uvls,ls->uv", eri_derivs[deriv_index, :, :, :, :], D)
+
+            # add code to contract eri_derivs with D to get K_deriv. K_uv = -1 * sum_ls (ul|vs) D_ls
+            K_deriv[deriv_index] = -1 / 2 * np.einsum("ulvs,ls->uv", eri_derivs[deriv_index, :, :, :, :], D)
+
+            # add code to contract d_derivs * d_matrix with D to get K_deriv, K^dse_uv = -1 sum_ls * d'_us * dlv D_ls
+            K_dse_deriv[deriv_index] = -1 * np.einsum("us,lv,ls->uv", d_derivs[deriv_index, :, :], d_matrix, D)
+
+            # add code to contract J_deriv with D to get J_gradient
+            J_gradient[deriv_index] = 1 / 2 * np.einsum("uv,uv->", D, J_deriv[deriv_index, :, :])
+
+            # add code to contract K_deriv with D to get K_gradient
+            K_gradient[deriv_index] = 1 / 2 * np.einsum("uv,uv->", D, K_deriv[deriv_index, :, :])
+
+            K_dse_gradient[deriv_index] = np.einsum("uv, uv->", D, K_dse_deriv[deriv_index, :, :])
+
+    # add code to return the J_gradient and K_gradient
+    return J_gradient, K_gradient, K_dse_gradient
+
+
     def export_to_json(self, filename):
         data = {
             "RHF Energy": self.rhf_energy,
