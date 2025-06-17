@@ -382,7 +382,7 @@ class CQEDRHFCalculator:
         # initialize three arrays for the K_dse terms
         d_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         K_dse_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
-        K_dse_gradient = np.zeros(3 * n_atoms)
+        self.K_dse_gradient = np.zeros(3 * n_atoms)
 
         # get the dipole integral derivatives
         #dipole_derivs = np.asarray(mints.ao_elec_dip_deriv1())
@@ -418,10 +418,10 @@ class CQEDRHFCalculator:
                 K_dse_deriv[deriv_index] = -1 * oe.contract("us,lv,ls->uv", d_derivs[deriv_index, :, :], d_matrix, D, optimize="optimal")
                 
                 # we only performed this for Da Da, we need to multiply by 2 to account for the beta density matrix
-                K_dse_gradient[deriv_index] = 2 * oe.contract("uv, uv->", D, K_dse_deriv[deriv_index, :, :], optimize="optimal")
+                self.K_dse_gradient[deriv_index] = 2 * oe.contract("uv, uv->", D, K_dse_deriv[deriv_index, :, :], optimize="optimal")
 
         # add code to return the J_gradient and K_gradient
-        return K_dse_gradient
+        
 
 
     def calc_numerical_gradient(self, delta=1.0e-5):
