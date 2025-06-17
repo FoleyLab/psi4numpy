@@ -151,6 +151,16 @@ class CQEDRHFCalculator:
         # compute the quadrupole contribution to the energy
         self.o_dse_energy = 2 * oe.contract("pq,pq->", Q_PF, D, optimize="optimal")
 
+        # compute the potential contribution to the energy
+        self.potential_energy = 2 * oe.contract("pq,pq->", V, D, optimize="optimal")
+        # compute the kinetic contribution to the energy
+        self.kinetic_energy = 2 * oe.contract("pq,pq->", T, D, optimize="optimal")
+
+        # compute the J contribution to the energy
+        self.J_energy = 2 * oe.contract("pq, pq->", J, D, optimize="optimal")
+        # compute the K contribution to the energy
+        self.K_energy = -1 * oe.contract("pq, pq->", K, D, optimize="optimal")
+
         self.K_dse_energy = -1 * oe.contract("pq,pq->", N, D, optimize="optimal") 
 
         # compute the RHF energy without the DSE terms
@@ -409,6 +419,10 @@ class CQEDRHFCalculator:
         # copy original molecule string
         original_molecule_string = self.molecule_string
         self.numerical_energy_gradient = np.zeros(self.num_atoms * 3)
+        self.numerical_kinetic_gradient = np.zeros(self.nume_atoms * 3)
+        self.numerical_potential_gradient = np.zeros(self.num_atoms * 3)
+        self.numerical_J_gradient = np.zeros(self.num_atoms * 3)
+        self.numerical_K_gradient = np.zeros(self.num_atoms * 3)
         self.numerical_o_dse_gradient = np.zeros(self.num_atoms * 3)
         self.numerical_K_dse_gradient = np.zeros(self.num_atoms * 3)
         self.numerical_scf_gradient = np.zeros(self.num_atoms * 3)
@@ -426,6 +440,10 @@ class CQEDRHFCalculator:
                 energy_plus = self.cqed_rhf_energy
                 o_dse_plus = self.o_dse_energy
                 K_dse_plus = self.K_dse_energy
+                T_plus = self.kinetic_energy
+                V_plus = self.potential_energy
+                J_plus = self.J_energy
+                K_plus = self.K_energy
                 scf_en_plus = self.rhf_energy_no_cav
 
                 self.molecule_string = self.modify_geometry_string(original_molecule_string, -_displacement)
@@ -434,11 +452,20 @@ class CQEDRHFCalculator:
                 o_dse_minus = self.o_dse_energy
                 K_dse_minus = self.K_dse_energy
                 scf_en_minus = self.rhf_energy_no_cav
+                T_minus = self.kinetic_energy
+                V_minus = self.potential_energy
+                J_minus = self.J_energy
+                K_minus = self.K_energy
+
 
                 self.numerical_energy_gradient[i * 3 + j] = (energy_plus - energy_minus) / (2 * delta * ang_to_Bohr)
                 self.numerical_o_dse_gradient[i * 3 + j] = (o_dse_plus - o_dse_minus) / (2 * delta * ang_to_Bohr)
                 self.numerical_K_dse_gradient[i * 3 + j] = (K_dse_plus - K_dse_minus) / (2 * delta * ang_to_Bohr)
                 self.numerical_scf_gradient[i * 3 + j] = (scf_en_plus - scf_en_minus) / (2 * delta * ang_to_Bohr)
+                self.numerical_kinetic_gradient[i * 3 + j] = (T_plus - T_minus) / (2 * delta * ang_to_Bohr)
+                self.numerical_potential_gradient[i * 3 + j] = (V_plus - V_minus) / (2 * delta * ang_to_Bohr)
+                self.numerical_J_gradient[i * 3 + j] = (J_plus - J_minus) / (2 * delta * ang_to_Bohr)
+                self.numerical_K_gradient[i * 3 + j] = (K_plus - K_minus) / (2 * delta * ang_to_Bohr)
 
     def modify_geometry_string(self, geometry_string, displacement_array):
         """
