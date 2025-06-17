@@ -178,14 +178,17 @@ class CQEDRHFCalculator:
 
         # symmetrization step
         D = 0.5 * (D + oe.contract("rs->sr", D, optimize="optimal"))
-        Dp4 = psi4.core.Matrix.from_array( D )
+
+        # we want to use Da + Db, just above I am only symmetrizing Da
+        # so I a multiplying by 2 to compensate
+        Dp4 = psi4.core.Matrix.from_array(2 * D )
         
         self.multipole_grad = np.asarray(mints.multipole_grad(Dp4, max_order, c_origin))
 
 
         self.cqed_rhf_energy = E_scf
         self.coefficients = C
-        self.density_matrix = D
+        self.density_matrix = D # just Da here!
         self.fock_matrix_ao = F
         self.canonical_fock_matrix_ao = F_can
         self.canonical_fock_matrix_mo = C.T @ F_can  @ C
