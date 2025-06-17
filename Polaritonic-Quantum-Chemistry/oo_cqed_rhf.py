@@ -691,7 +691,7 @@ class CQEDRHFCalculator:
         self.compute_nuclear_repulsion_gradient()
 
         # sum together the different contributions to get the total canonical gradient
-        self.canonical_gradient = (self.kinetic_gradient + self.potential_gradient + self.J_gradient + self.K_gradient).reshape(3,3) + self.nuclear_repulsion_gradient
+        self.canonical_gradient = (self.overlap_gradient + self.kinetic_gradient + self.potential_gradient + self.J_gradient + self.K_gradient).reshape(3,3) + self.nuclear_repulsion_gradient
 
     def export_to_json(self, filename):
         data = {
