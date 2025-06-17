@@ -419,7 +419,7 @@ class CQEDRHFCalculator:
         # copy original molecule string
         original_molecule_string = self.molecule_string
         self.numerical_energy_gradient = np.zeros(self.num_atoms * 3)
-        self.numerical_kinetic_gradient = np.zeros(self.nume_atoms * 3)
+        self.numerical_kinetic_gradient = np.zeros(self.num_atoms * 3)
         self.numerical_potential_gradient = np.zeros(self.num_atoms * 3)
         self.numerical_J_gradient = np.zeros(self.num_atoms * 3)
         self.numerical_K_gradient = np.zeros(self.num_atoms * 3)
