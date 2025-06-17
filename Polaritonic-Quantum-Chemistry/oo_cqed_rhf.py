@@ -133,7 +133,11 @@ class CQEDRHFCalculator:
             Cocc = C[:, :ndocc]
             D = np.einsum("pi,qi->pq", Cocc, Cocc)
 
-            H = H_0 + Q_PF 
+            H = H_0 + Q_PF
+
+            F_can = H_0 + 2 * J - K 
+
+             
 
         else:
             psi4.core.clean()
@@ -148,6 +152,9 @@ class CQEDRHFCalculator:
         self.o_dse_energy = 2 * oe.contract("pq,pq->", Q_PF, D, optimize="optimal")
 
         self.K_dse_energy = -1 * oe.contract("pq,pq->", N, D, optimize="optimal") 
+
+        # compute the RHF energy without the DSE terms
+        self.rhf_energy_no_cav = oe.contract("pq,pq->", F_can + H_0, D, optimize="optimal") + Enuc 
 
         # update d_exp
         d_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
@@ -301,6 +308,87 @@ class CQEDRHFCalculator:
                 # calculate the gradient components
                 self.K_dse_gradient[deriv_index] += self.lambda_vector[2] ** 2 * tmp_z[deriv_index, 2]
 
+    
+    def calc_dipole_dipole_gradient_2(self):
+        """
+        NEEDS COMPLETING: Method to compute the two-electron integral gradient terms
+
+        Arguments
+        ---------
+        geometry_string : str
+            psi4 molecule string
+
+        basis_set : str
+            basis set to use for the calculation, defaults to 'sto-3g'
+
+        method : str
+            quantum chemistry method to use for the calculation, defaults to 'scf'
+
+        The two-electron integral gradient terms are the derivatives of the two-electron integrals with respect to the nuclear coordinates.
+        To compute the two-electron integral gradient terms, we need the two-electron integrals and the nuclear repulsion gradient.
+        We will get these from a converged Hartree-Fock calculation.
+        """
+        # instantiate mints
+        mints = psi4.core.MintsHelper(self.psi4_wfn.basisset())
+
+        # initialize the two-electron integrals derivative matrices
+        n_atoms = self.num_atoms
+        n_orbitals = self.n_orbitals
+
+        # initialize three arrays for the K_dse terms
+        dipole_derivs = np.zeros((3 * n_atoms, 3, n_orbitals, n_orbitals))
+        d_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+        d_matrix = np.zeros((n_orbitals, n_orbitals))
+        K_dse_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
+        K_dse_gradient = np.zeros(3 * n_atoms)
+
+        # get the dipole integral derivatives
+        #dipole_derivs = np.asarray(mints.ao_elec_dip_deriv1())
+        
+
+        # get the dipole integrals
+        d_matrix = self.lambda_vector[0] * np.asarray(mints.ao_dipole()[0])
+        print("x contribution of d matrix")
+        print(d_matrix)
+        d_matrix += self.lambda_vector[1] * np.asarray(mints.ao_dipole()[1])
+        print("y contribution of d matrix")
+        print(d_matrix)
+        d_matrix += self.lambda_vector[2] * np.asarray(mints.ao_dipole()[2])
+        print("z contribution of d matrix")
+        print(d_matrix)
+
+        #print("The shape of dipole_derivs is ",np.shape(dipole_derivs))
+        print("The shape of d_matrix is ", np.shape(d_matrix))
+                                            
+        
+
+        # loop over all of the atoms
+        for atom_index in range(n_atoms):
+            # Derivatives with respect to x, y, and z of the current atom
+            _dip_deriv = np.asarray(mints.ao_elec_dip_deriv1(atom_index))
+            for cart_index in range(3):
+                deriv_index = 3 * atom_index + cart_index
+
+                # get element of d_deriv:
+                if cart_index == 0:
+                    d_derivs[deriv_index] += self.lambda_vector[0] * _dip_deriv[0] + self.lambda_vector[1] * _dip_deriv[3] + self.lambda_vector[2] * _dip_deriv[6]
+
+                elif cart_index == 1:
+                    d_derivs[deriv_index] += self.lambda_vector[0] * _dip_deriv[1] + self.lambda_vector[1] * _dip_deriv[4] + self.lambda_vector[2] * _dip_deriv[7]
+
+                else:
+                    d_derivs[deriv_index] += self.lambda_vector[0] * _dip_deriv[2] + self.lambda_vector[1] * _dip_deriv[5] + self.lambda_vector[2] * _dip_deriv[8]
+
+            
+
+                # add code to contract d_derivs * d_matrix with D to get K_deriv, K^dse_uv = -1 sum_ls * d'_us * dlv D_ls
+                K_dse_deriv[deriv_index] = -1 * np.einsum("us,lv,ls->uv", d_derivs[deriv_index, :, :], d_matrix, D)
+
+                K_dse_gradient[deriv_index] = np.einsum("uv, uv->", D, K_dse_deriv[deriv_index, :, :])
+
+        # add code to return the J_gradient and K_gradient
+        return K_dse_gradient
+
 
     def calc_numerical_gradient(self, delta=1.0e-5):
         """Calculate the numerical gradient of the CQED-RHF energy with respect to the lambda vector.
@@ -319,6 +407,7 @@ class CQEDRHFCalculator:
         self.numerical_energy_gradient = np.zeros(self.num_atoms * 3)
         self.numerical_o_dse_gradient = np.zeros(self.num_atoms * 3)
         self.numerical_K_dse_gradient = np.zeros(self.num_atoms * 3)
+        self.numerical_scf_gradient = np.zeros(self.num_atoms * 3)
 
         # converstion from Angstroms to Bohr
         ang_to_Bohr = 1 / 0.52917721092  # convert Angstroms to Bohr
@@ -333,17 +422,19 @@ class CQEDRHFCalculator:
                 energy_plus = self.cqed_rhf_energy
                 o_dse_plus = self.o_dse_energy
                 K_dse_plus = self.K_dse_energy
+                scf_en_plus = self.rhf_energy_no_cav
 
                 self.molecule_string = self.modify_geometry_string(original_molecule_string, -_displacement)
                 self.calc_cqed_rhf_energy()
                 energy_minus = self.cqed_rhf_energy
                 o_dse_minus = self.o_dse_energy
                 K_dse_minus = self.K_dse_energy
+                scf_en_minus = self.rhf_energy_no_cav
 
                 self.numerical_energy_gradient[i * 3 + j] = (energy_plus - energy_minus) / (2 * delta * ang_to_Bohr)
                 self.numerical_o_dse_gradient[i * 3 + j] = (o_dse_plus - o_dse_minus) / (2 * delta * ang_to_Bohr)
                 self.numerical_K_dse_gradient[i * 3 + j] = (K_dse_plus - K_dse_minus) / (2 * delta * ang_to_Bohr)
-    
+                self.numerical_scf_gradient[i * 3 + j] = (scf_en_plus - scf_en_minus) / (2 * delta * ang_to_Bohr)
 
     def modify_geometry_string(self, geometry_string, displacement_array):
         """
