@@ -34,21 +34,26 @@ class CQEDRHFCalculator:
         self.rhf_energy, wfn = psi4.energy("scf", return_wfn=True)
         self.psi4_wfn = wfn
 
+        # instantiate MintsHelper, store instance as an attribute of the CQEDRHFCalculator class
         self.mints = psi4.core.MintsHelper(wfn.basisset())
-        ndocc = wfn.nalpha()
 
+        # get some standard information and also store as attributes
+        ndocc = wfn.nalpha()
+        self.ndocc = ndocc
+        self.n_orbitals = wfn.nmo()
+        self.num_atoms = mol.natom()
+        
+        # get initial density matrix
         C = np.asarray(wfn.Ca())
         Cocc = C[:, :ndocc]
         D = oe.contract("pi,qi->pq", Cocc, Cocc, optimize="optimal")
 
-        self.ndocc = ndocc
-        self.n_orbitals = wfn.nmo()
-        self.num_atoms = mol.natom()
-
+        # get standard integrals
         V = np.asarray(self.mints.ao_potential())
         T = np.asarray(self.mints.ao_kinetic())
         I = np.asarray(self.mints.ao_eri())
 
+        # get nuclear dipole contributions
         mu_nuc_x = mol.nuclear_dipole()[0]
         mu_nuc_y = mol.nuclear_dipole()[1]
         mu_nuc_z = mol.nuclear_dipole()[2]
@@ -58,11 +63,6 @@ class CQEDRHFCalculator:
         mu_ao_y = np.asarray(self.mints.ao_dipole()[1])
         mu_ao_z = np.asarray(self.mints.ao_dipole()[2])
 
-        # electronic dipole moment in SO basis
-        self.dipole_so_x = np.asarray(self.mints.so_dipole()[0])
-        self.dipole_so_y = np.asarray(self.mints.so_dipole()[1])
-        self.dipole_so_z = np.asarray(self.mints.so_dipole()[2])
-
         #mu_nuc_x, mu_nuc_y, mu_nuc_z = mol.nuclear_dipole()
         mu_nuc = np.array([mu_nuc_x, mu_nuc_y, mu_nuc_z])
 
@@ -71,18 +71,15 @@ class CQEDRHFCalculator:
 
         d_ao = sum(self.lambda_vector[i] * mu_ao[i] for i in range(3))
 
+        # electronic dipole moment expectation value from RHF 
         mu_exp = np.array([
             2 * oe.contract("pq,pq->", mu_ao[i], D, optimize='optimal') for i in range(3)
-        ]) + mu_nuc
+        ]) 
+        # this is the current dipole moment from the RHF wavefunction, at the end
+        # of scf iterations it will be the CQED-RHF dipole moment
+        self.rhf_dipole_moment = mu_exp + mu_nuc
 
-        self.rhf_dipole_moment = mu_exp.copy()
-        d_nuc = sum(self.lambda_vector[i] * mu_nuc[i] for i in range(3))
-        d_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
-
-        d_c = 0.5 * d_nuc**2 - d_nuc * d_exp + 0.5 * d_exp**2
-
-        self.dipole_energy = d_c
-
+        # handle quadrupole contribution to O_DSE
         Q_ao_xx, Q_ao_xy, Q_ao_xz, Q_ao_yy, Q_ao_yz, Q_ao_zz = [np.asarray(x) for x in self.mints.ao_quadrupole()]
         Q_ao = [Q_ao_xx, Q_ao_xy, Q_ao_xz, Q_ao_yy, Q_ao_yz, Q_ao_zz]
 
@@ -93,9 +90,10 @@ class CQEDRHFCalculator:
         Q_PF -= self.lambda_vector[0] * self.lambda_vector[2] * Q_ao_xz
         Q_PF -= self.lambda_vector[1] * self.lambda_vector[2] * Q_ao_yz
 
-
-        d_PF = (d_nuc - d_exp) * d_ao 
+        # canonical core Hamiltonian
         H_0 = T + V
+
+        # QED core Hamiltonian
         H = H_0 + Q_PF 
 
         S = self.mints.ao_overlap()
@@ -112,15 +110,21 @@ class CQEDRHFCalculator:
         D_conv = self.psi4_options.get("d_convergence", 1.0e-5)
 
         for scf_iter in range(1, maxiter + 1):
+
+            # canonical J and K contributions
             J = oe.contract("pqrs,rs->pq", I, D, optimize="optimal")
             K = oe.contract("prqs,rs->pq", I, D, optimize="optimal")
             
+            # K_dse contribution
             N = oe.contract("pr,qs,rs->pq", d_ao, d_ao, D, optimize="optimal")
 
+            # updated Fock matrix
             F = H + 2 * J - K - N 
 
             diis_e = A @ (F @ D @ S - S @ D @ F) @ A
             dRMS = np.sqrt(np.mean(diis_e**2))
+
+            # current QED-RHF energy, note D is only Da so we are performing einsum over (F+H) D
             E_scf = oe.contract("pq,pq->", F + H, D, optimize="optimal") + Enuc 
 
             if abs(E_scf - Eold) < E_conv and dRMS < D_conv:
@@ -132,83 +136,60 @@ class CQEDRHFCalculator:
             C = A @ C2
             Cocc = C[:, :ndocc]
             D = np.einsum("pi,qi->pq", Cocc, Cocc)
-
-            H = H_0 + Q_PF
-
-            F_can = H_0 + 2 * J - K 
-
              
 
+        # executes if number of SCF iterations hits the maximum without the break condition
         else:
             psi4.core.clean()
             raise Exception("Maximum number of SCF cycles exceeded.")
         
-        # update the dipole expectation value with the converged density matrix
+        # update the electronic dipole expectation value with the converged density matrix
         mu_exp = np.array([
             2 * oe.contract("pq,pq->", mu_ao[i], D, optimize='optimal') for i in range(3)
-        ]) + mu_nuc
+        ]) 
 
-        # compute the quadrupole contribution to the energy
-        self.o_dse_energy = 2 * oe.contract("pq,pq->", Q_PF, D, optimize="optimal")
+        # this is the full qed-rhf dipole moment, electronic + nuclear
+        self.qedrhf_dipole_moment = mu_exp + mu_nuc
 
-        # compute the potential contribution to the energy
-        self.potential_energy = 2 * oe.contract("pq,pq->", V, D, optimize="optimal")
-        # compute the kinetic contribution to the energy
-        self.kinetic_energy = 2 * oe.contract("pq,pq->", T, D, optimize="optimal")
+        self.nuclear_dipole_moment = mu_nuc
+        self.qedrhf_electronic_dipole_moment = mu_exp
 
-        # compute the J contribution to the energy
-        self.J_energy = 2 * oe.contract("pq, pq->", J, D, optimize="optimal")
-        # compute the K contribution to the energy
-        self.K_energy = -1 * oe.contract("pq, pq->", K, D, optimize="optimal")
+        # these can be useful for QED-CI
+        self.d_nuc = sum(self.lambda_vector[i] * mu_nuc[i] for i in range(3)) # nuclear part of d
+        self.d_exp_el = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3)) # electronic part of <d>
+        self.d_exp = self.d_exp_el + self.d_nuc # total <d>
 
-        self.K_dse_energy = -1 * oe.contract("pq,pq->", N, D, optimize="optimal") 
 
-        # compute the RHF energy without the DSE terms
-        self.rhf_energy_no_cav = oe.contract("pq,pq->", F_can + H_0, D, optimize="optimal") + Enuc 
+        self.dipole_energy = 0.5 * self.d_nuc**2 - self.d_nuc * self.d_exp_el + 0.5 * self.d_exp_el**2
 
-        # update d_exp
-        d_exp = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3))
-        d_c = 0.5 * d_nuc**2 - d_nuc * d_exp + 0.5 * d_exp**2
-        self.dipole_energy = d_c
-        d_PF = (d_nuc - d_exp) * d_ao
-
-        # go ahead and grab the dipole and quadrupole moment gradients for later use
-        c_origin = [0.0, 0.0, 0.0]
-        max_order = 2
-
-        # symmetrization step
-        D = 0.5 * (D + oe.contract("rs->sr", D, optimize="optimal"))
-
-        # we want to use Da + Db, just above I am only symmetrizing Da
-        # so I a multiplying by 2 to compensate
-        Dp4 = psi4.core.Matrix.from_array(2 * D )
+        # for qed-ci in photon number basis
+        self.d_PF_pn = self.d_nuc * d_ao
         
-        self.multipole_grad = np.asarray(self.mints.multipole_grad(Dp4, max_order, c_origin))
+        # for qed-ci in the coherent state basis
+        self.d_PF_cs = - self.d_exp_el * d_ao
 
-
-        self.cqed_rhf_energy = E_scf
         self.coefficients = C
         self.density_matrix = D # just Da here!
         self.fock_matrix_ao = F
-        self.canonical_fock_matrix_ao = F_can
-        self.canonical_fock_matrix_mo = C.T @ F_can  @ C
+        self.canonical_fock_matrix_ao = H_0 + 2 * J - K
+        self.canonical_fock_matrix_mo = C.T @ (H_0 + 2 * J - K)  @ C
         self.fock_matrix_mo = C.T @ F @ C
         self.orbital_energies = e
         self.dipole_moment = mu_exp
         self.nuclear_dipole_moment = mu_nuc
         self.Q_PF = Q_PF
         self.d_ao = d_ao
-        self.d_PF = d_PF
 
 
     def summary(self):
-        print(f"RHF Energy:           {self.rhf_energy:.8f} Ha")
-        print(f"CQED-RHF Energy:      {self.cqed_rhf_energy:.8f} Ha")
-        print(f"Dipole Energy:        {self.dipole_energy:.8f} Ha")
-        print(f"Nuclear Repulsion:    {self.nuclear_repulsion_energy:.8f} Ha")
-        print(f"Dipole Moment:        {self.dipole_moment}")
+        print(f"RHF Energy:                    {self.rhf_energy:.8f} Ha")
+        print(f"CQED-RHF Energy:               {self.cqed_rhf_energy:.8f} Ha")
+        print(f"Dipole Energy:                 {self.dipole_energy:.8f} Ha")
+        print(f"Nuclear Repulsion:             {self.nuclear_repulsion_energy:.8f} Ha")
+        print(F"RHF Dipole Moment:             {self.rhf_dipole_moment}")
+        print(f"CQED-RHF Dipole Moment:        {self.qedrhf_dipole_moment}")
 
-    def calc_scf_gradient(self, qed_wfn=False):
+    def compute_scf_gradient(self, qed_wfn=False):
         """Calculate the SCF gradient using psi4 core functionality.
         
         This method requires that the wavefunction has been calculated first.
@@ -267,30 +248,47 @@ class CQEDRHFCalculator:
         self.hilbert_o_dse = dse_gradient_zz * -0.5 * lambda_z * lambda_z
 
     
-    def calc_quadrupole_gradient(self):
+    def compute_quadrupole_gradient(self):
         """ Calculate the quadrupole gradient using the CQED-RHF results.
         Returns:
             numpy.ndarray: The quadrupole gradient as a numpy array.
         """
-        self.o_dse_gradient = np.zeros(3 * self.num_atoms)
+
+        # define c_origin as the origin of the coordinate system
+        c_origin = [0.0, 0.0, 0.0]  # origin
+
+        # define max_order = 2
+        max_order = 2  # dipole and quadrupole
+
+        # symmetrize the density matrix
+        D = 0.5 * (self.density_matrix + oe.contract('rs->sr', self.density_matrix, optimize="optimal"))
+
+        # cast as Psi4 matrix.  Also multiply by 2 to account for alpha and beta density matrices
+        Dp4 = psi4.core.Matrix.from_array(2 * D)
+
+        # get the multipole gradient
+        self.multipole_grad = np.asarray(self.mints.multipole_grad(Dp4, max_order, c_origin))
+
+        # shape as (num_atoms, 3) array, like psi4 does
+        self.o_dse_gradient = np.zeros((self.num_atoms,3))
 
         for atom_index in range(self.num_atoms):
             for cart_index in range(3):
                 deriv_index = 3 * atom_index + cart_index
 
-                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[0] ** 2 * self.multipole_grad[deriv_index, 3]
-                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[1] ** 2 * self.multipole_grad[deriv_index, 6]
-                self.o_dse_gradient[deriv_index] -= 0.5 * self.lambda_vector[2] ** 2 * self.multipole_grad[deriv_index, 8]
-                self.o_dse_gradient[deriv_index] -= self.lambda_vector[0] * self.lambda_vector[1] * self.multipole_grad[deriv_index, 4]
-                self.o_dse_gradient[deriv_index] -= self.lambda_vector[0] * self.lambda_vector[2] * self.multipole_grad[deriv_index, 5]
-                self.o_dse_gradient[deriv_index] -= self.lambda_vector[1] * self.lambda_vector[2] * self.multipole_grad[deriv_index, 7]
+                self.o_dse_gradient[atom_index,cart_index] -= 0.5 * self.lambda_vector[0] ** 2 * self.multipole_grad[deriv_index, 3]
+                self.o_dse_gradient[atom_index,cart_index] -= 0.5 * self.lambda_vector[1] ** 2 * self.multipole_grad[deriv_index, 6]
+                self.o_dse_gradient[atom_index,cart_index] -= 0.5 * self.lambda_vector[2] ** 2 * self.multipole_grad[deriv_index, 8]
+                self.o_dse_gradient[atom_index,cart_index] -= self.lambda_vector[0] * self.lambda_vector[1] * self.multipole_grad[deriv_index, 4]
+                self.o_dse_gradient[atom_index,cart_index] -= self.lambda_vector[0] * self.lambda_vector[2] * self.multipole_grad[deriv_index, 5]
+                self.o_dse_gradient[atom_index,cart_index] -= self.lambda_vector[1] * self.lambda_vector[2] * self.multipole_grad[deriv_index, 7]
 
-        print(self.o_dse_gradient.reshape(self.num_atoms, 3))
+        
 
     
-    def calc_dipole_dipole_gradient(self):
+    def compute_dipole_dipole_gradient(self):
         """
-        NEEDS COMPLETING: Method to compute the two-electron integral gradient terms
+        Method to compute the two-electron integral gradient terms
 
         Arguments
         ---------
@@ -315,8 +313,9 @@ class CQEDRHFCalculator:
         # initialize three arrays for the K_dse terms
         d_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         K_dse_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
-        self.K_dse_gradient = np.zeros(3 * n_atoms)
 
+        # final gradient has shape (n_atoms, 3) like psi4
+        self.K_dse_gradient = np.zeros((n_atoms, 3))
 
         d_matrix = self.d_ao
 
@@ -348,11 +347,11 @@ class CQEDRHFCalculator:
                 K_dse_deriv[deriv_index] = -1 * oe.contract("us,lv,ls->uv", d_derivs[deriv_index, :, :], d_matrix, D, optimize="optimal")
                 
                 # we only performed this for Da Da, we need to multiply by 2 to account for the beta density matrix
-                self.K_dse_gradient[deriv_index] = 2 * oe.contract("uv, uv->", D, K_dse_deriv[deriv_index, :, :], optimize="optimal")
+                self.K_dse_gradient[atom_index, cart_index] = 2 * oe.contract("uv, uv->", D, K_dse_deriv[deriv_index, :, :], optimize="optimal")
 
 
 
-    def calc_numerical_gradient(self, delta=1.0e-5):
+    def compute_numerical_gradient(self, delta=1.0e-5):
         """Calculate the numerical gradient of the CQED-RHF energy with respect to the lambda vector.
         
         This method uses finite differences to compute the gradient.
@@ -366,7 +365,9 @@ class CQEDRHFCalculator:
         
         # copy original molecule string
         original_molecule_string = self.molecule_string
-        self.numerical_energy_gradient = np.zeros(self.num_atoms * 3)
+
+        # numerical gradient has shape (num_atoms, 3) like psi4
+        self.numerical_energy_gradient = np.zeros((self.num_atoms, 3))
 
 
         # converstion from Angstroms to Bohr
@@ -389,7 +390,7 @@ class CQEDRHFCalculator:
                 energy_minus = self.cqed_rhf_energy
 
                 # compute gradient element
-                self.numerical_energy_gradient[i * 3 + j] = (energy_plus - energy_minus) / (2 * delta * ang_to_Bohr)
+                self.numerical_energy_gradient[i, j] = (energy_plus - energy_minus) / (2 * delta * ang_to_Bohr)
 
 
     def modify_geometry_string(self, geometry_string, displacement_array):
@@ -466,7 +467,7 @@ class CQEDRHFCalculator:
         # Define your molecular geometry
         molecule = psi4.geometry(self.molecule_string)
 
-        # get the nuclear repulsion gradient
+        # get the nuclear repulsion gradient, which will have shape (num_atoms, 3)
         self.nuclear_repulsion_gradient = np.asarray(molecule.nuclear_repulsion_energy_deriv1())
 
 
@@ -502,8 +503,11 @@ class CQEDRHFCalculator:
 
         # now compute the overlap gradient and contract with Fock matrix
         overlap_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
-        self.canonical_overlap_gradient = np.zeros(3 * n_atoms) # uses the canonical Fock matrix
-        self.overlap_gradient = np.zeros(3 * n_atoms) # uses the Fock matrix with QED terms
+        
+
+        # overlap gradient will have shape (n_atoms, 3) like psi4
+        self.canonical_overlap_gradient = np.zeros(3 * n_atoms) # uses the Fock matrix without QED terms
+        self.overlap_gradient = np.zeros((n_atoms, 3)) # uses the Fock matrix with QED terms
 
 
         for atom_index in range(n_atoms):
@@ -514,8 +518,8 @@ class CQEDRHFCalculator:
 
                 # Get overlap derivatives for this atom and Cartesian component
                 overlap_derivs[deriv_index, :, :] = np.asarray(self.mints.mo_oei_deriv1("OVERLAP", atom_index, C, C)[cart_index])
-                self.canonical_overlap_gradient[deriv_index] = -2.0 * oe.contract('ii,ii->', self.canonical_fock_matrix_mo[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal')
-                self.overlap_gradient[deriv_index] = -2.0 * oe.contract('ii,ii->', self.fock_matrix_mo[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal') 
+                self.canonical_overlap_gradient[atom_index, cart_index] = -2.0 * oe.contract('ii,ii->', self.canonical_fock_matrix_mo[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal')
+                self.overlap_gradient[atom_index, cart_index] = -2.0 * oe.contract('ii,ii->', self.fock_matrix_mo[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal') 
 
 
     def compute_one_electron_integral_gradient_terms(self):
@@ -546,10 +550,10 @@ class CQEDRHFCalculator:
         # initialize the one-electron integrals derivative matrices
         kinetic_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         potential_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
-        
 
-        self.kinetic_gradient = np.zeros(3 * n_atoms)
-        self.potential_gradient = np.zeros(3 * n_atoms)
+        # gradients will have shape (n_atoms, 3) like psi4
+        self.kinetic_gradient = np.zeros((n_atoms, 3))
+        self.potential_gradient = np.zeros((n_atoms, 3))
 
         # loop over all of the atoms
         for atom_index in range(n_atoms):
@@ -562,10 +566,10 @@ class CQEDRHFCalculator:
                 potential_derivs[deriv_index] = np.asarray(self.mints.ao_oei_deriv1("POTENTIAL", atom_index)[cart_index])
 
                 # add code to contract kinetic_derivs with D, multiply by 2 since self.density_matrix is alpha only
-                self.kinetic_gradient[deriv_index] = 2 * oe.contract("uv,uv->", self.density_matrix, kinetic_derivs[deriv_index, :, :], optimize='optimal')
+                self.kinetic_gradient[atom_index, cart_index] = 2 * oe.contract("uv,uv->", self.density_matrix, kinetic_derivs[deriv_index, :, :], optimize='optimal')
 
                 # add code to contract potential_derivs with D
-                self.potential_gradient[deriv_index] = 2 * oe.contract("uv,uv->", self.density_matrix, potential_derivs[deriv_index, :, :], optimize='optimal')
+                self.potential_gradient[atom_index, cart_index] = 2 * oe.contract("uv,uv->", self.density_matrix, potential_derivs[deriv_index, :, :], optimize='optimal')
 
 
     def compute_two_electron_integral_gradient_terms(self):
@@ -600,8 +604,10 @@ class CQEDRHFCalculator:
         eri_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals, n_orbitals, n_orbitals))
         J_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         K_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
-        self.J_gradient = np.zeros(3 * n_atoms)
-        self.K_gradient = np.zeros(3 * n_atoms)
+
+        # gradients will be shape (n_atoms, 3) like psi4
+        self.J_gradient = np.zeros((n_atoms, 3))
+        self.K_gradient = np.zeros((n_atoms, 3))
 
 
         # loop over all of the atoms
@@ -622,19 +628,56 @@ class CQEDRHFCalculator:
                 K_deriv[deriv_index] = -1 / 2 * oe.contract("ulvs,ls->uv", eri_derivs[deriv_index, :, :, :, :], D, optimize="optimal")
 
                 # add code to contract J_deriv with D to get J_gradient
-                self.J_gradient[deriv_index] = 1 / 2 * oe.contract("uv,uv->", D, J_deriv[deriv_index, :, :], optimize="optimal")
+                self.J_gradient[atom_index, cart_index] = 1 / 2 * oe.contract("uv,uv->", D, J_deriv[deriv_index, :, :], optimize="optimal")
 
                 # add code to contract K_deriv with D to get K_gradient
-                self.K_gradient[deriv_index] = 1 / 2 * oe.contract("uv,uv->", D, K_deriv[deriv_index, :, :], optimize="optimal")
+                self.K_gradient[atom_index, cart_index] = 1 / 2 * oe.contract("uv,uv->", D, K_deriv[deriv_index, :, :], optimize="optimal")
 
-    def compute_canonical_gradients(self):
-        self.compute_fock_matrix_term()
-        self.compute_one_electron_integral_gradient_terms()
-        self.compute_two_electron_integral_gradient_terms()
-        self.compute_nuclear_repulsion_gradient()
+    def compute_analytic_gradient(self, use_psi4=False):
+        """ Method to compute the term-by-term analytic gradient for the CQED-RHF energy.
+        
+        if use_psi4=False, then the method will compute the gradient using the methods defined in this class.
+        if use_psi4=True, then the method will use psi4's built-in scfgrad function to compute the canonical
+        gradient terms and only call methods of this class for the dipole_dipole and quadrupole gradient terms.
+         
+        """
+        if use_psi4:
+            self.compute_scf_gradient(qed_wfn=True)
+            self.compute_quadrupole_gradient()
+            self.compute_dipole_dipole_gradient()
+            self.qed_rhf_gradient = self.scf_grad + self.o_dse_gradient + self.K_dse_gradient
 
-        # sum together the different contributions to get the total canonical gradient
-        self.canonical_gradient = (self.overlap_gradient + self.kinetic_gradient + self.potential_gradient + self.J_gradient + self.K_gradient).reshape(3,3) + self.nuclear_repulsion_gradient
+        else:
+            self.compute_fock_matrix_term()
+            self.compute_one_electron_integral_gradient_terms()
+            self.compute_two_electron_integral_gradient_terms()
+            self.compute_nuclear_repulsion_gradient()
+            self.compute_dipole_dipole_gradient()
+            self.compute_quadrupole_gradient()
+            # sum together the different contributions to get the total canonical gradient
+            self.canonical_scf_gradient = self.overlap_gradient + self.kinetic_gradient + self.potential_gradient + self.J_gradient + self.K_gradient + self.nuclear_repulsion_gradient
+            self.qedrhf_gradient = self.canonical_scf_gradient + self.K_dse_gradient + self.o_dse_gradient
+
+    def gradient_summary(self):
+        self.compute_analytic_gradient(use_psi4=False)
+        self.compute_numerical_gradient()
+        print(f"Analytical CQED-RHF Gradient:\n")
+        print(self.qedrhf_gradient)
+        print(f"\nNumerical CQED-RHF Gradient:\n")
+        print(self.numerical_energy_gradient)
+        difference = self.qedrhf_gradient - self.numerical_energy_gradient
+        diff_norm = np.linalg.norm(difference)
+        print(f"\nDifference between analytical and numerical gradient: {diff_norm:.8f}\n")
+
+        self.compute_analytic_gradient(use_psi4=True)
+        print(F"Analytical Canonical Gradient:\n")
+        print(self.canonical_scf_gradient)
+        print(f"Analytical Canonical Gradient using Psi4:\n")
+        print(self.scf_grad)
+        difference = self.canonical_scf_gradient - self.scf_grad
+        diff_norm = np.linalg.norm(difference)
+        print(f"\nDifference between analytical and Psi4 canonical gradient: {diff_norm:.8f}\n")
+
 
     def export_to_json(self, filename):
         data = {
