@@ -27,14 +27,16 @@ class CQEDRHFCalculator:
         self.qed_wfn = None
 
     def calc_cqed_rhf_energy(self):
+
         # define molecule and options
         mol = psi4.geometry(self.molecule_string)
         psi4.set_options(self.psi4_options)
         self.rhf_energy, wfn = psi4.energy("scf", return_wfn=True)
         self.psi4_wfn = wfn
 
-        mints = psi4.core.MintsHelper(wfn.basisset())
+        self.mints = psi4.core.MintsHelper(wfn.basisset())
         ndocc = wfn.nalpha()
+
         C = np.asarray(wfn.Ca())
         Cocc = C[:, :ndocc]
         D = oe.contract("pi,qi->pq", Cocc, Cocc, optimize="optimal")
@@ -43,25 +45,23 @@ class CQEDRHFCalculator:
         self.n_orbitals = wfn.nmo()
         self.num_atoms = mol.natom()
 
-        V = np.asarray(mints.ao_potential())
-        T = np.asarray(mints.ao_kinetic())
-        I = np.asarray(mints.ao_eri())
+        V = np.asarray(self.mints.ao_potential())
+        T = np.asarray(self.mints.ao_kinetic())
+        I = np.asarray(self.mints.ao_eri())
 
         mu_nuc_x = mol.nuclear_dipole()[0]
         mu_nuc_y = mol.nuclear_dipole()[1]
         mu_nuc_z = mol.nuclear_dipole()[2]
 
         # electronic dipole integrals in AO basis
-        mu_ao_x = np.asarray(mints.ao_dipole()[0])
-        mu_ao_y = np.asarray(mints.ao_dipole()[1])
-        mu_ao_z = np.asarray(mints.ao_dipole()[2])
+        mu_ao_x = np.asarray(self.mints.ao_dipole()[0])
+        mu_ao_y = np.asarray(self.mints.ao_dipole()[1])
+        mu_ao_z = np.asarray(self.mints.ao_dipole()[2])
 
         # electronic dipole moment in SO basis
-        self.dipole_so_x = np.asarray(mints.so_dipole()[0])
-        self.dipole_so_y = np.asarray(mints.so_dipole()[1])
-        self.dipole_so_z = np.asarray(mints.so_dipole()[2])
-
-
+        self.dipole_so_x = np.asarray(self.mints.so_dipole()[0])
+        self.dipole_so_y = np.asarray(self.mints.so_dipole()[1])
+        self.dipole_so_z = np.asarray(self.mints.so_dipole()[2])
 
         #mu_nuc_x, mu_nuc_y, mu_nuc_z = mol.nuclear_dipole()
         mu_nuc = np.array([mu_nuc_x, mu_nuc_y, mu_nuc_z])
@@ -83,7 +83,7 @@ class CQEDRHFCalculator:
 
         self.dipole_energy = d_c
 
-        Q_ao_xx, Q_ao_xy, Q_ao_xz, Q_ao_yy, Q_ao_yz, Q_ao_zz = [np.asarray(x) for x in mints.ao_quadrupole()]
+        Q_ao_xx, Q_ao_xy, Q_ao_xz, Q_ao_yy, Q_ao_yz, Q_ao_zz = [np.asarray(x) for x in self.mints.ao_quadrupole()]
         Q_ao = [Q_ao_xx, Q_ao_xy, Q_ao_xz, Q_ao_yy, Q_ao_yz, Q_ao_zz]
 
         Q_PF = -0.5 * self.lambda_vector[0]**2 * Q_ao_xx
@@ -98,8 +98,8 @@ class CQEDRHFCalculator:
         H_0 = T + V
         H = H_0 + Q_PF 
 
-        S = mints.ao_overlap()
-        A = mints.ao_overlap()
+        S = self.mints.ao_overlap()
+        A = self.mints.ao_overlap()
         A.power(-0.5, 1.0e-16)
         A = np.asarray(A)
 
@@ -183,7 +183,7 @@ class CQEDRHFCalculator:
         # so I a multiplying by 2 to compensate
         Dp4 = psi4.core.Matrix.from_array(2 * D )
         
-        self.multipole_grad = np.asarray(mints.multipole_grad(Dp4, max_order, c_origin))
+        self.multipole_grad = np.asarray(self.mints.multipole_grad(Dp4, max_order, c_origin))
 
 
         self.cqed_rhf_energy = E_scf
@@ -200,19 +200,6 @@ class CQEDRHFCalculator:
         self.d_ao = d_ao
         self.d_PF = d_PF
 
-        #q_exp = oe.contract([2 * np.einsum("pq,pq->", Q, D, optimize="optimal") for Q in Q_ao])
-        #self.quadrupole_moment = q_exp
-
-        #wfn_dict = psi4.core.Wavefunction.to_file(wfn)
-        #wfn_dict['matrix']['Ca'] = np.copy(C)
-        #wfn_dict['matrix']['Cb'] = np.copy(C)
-        #wfn_dict['matrix']['Da'] = np.copy(D)
-        #wfn_dict['matrix']['Db'] = np.copy(D)
-        #wfn_dict['matrix']['Fa'] = np.copy(F)
-        #wfn_dict['matrix']['Fb'] = np.copy(F)
-        #wfn_dict['vector']['epsilon_a'] = np.copy(e)
-        #wfn_dict['vector']['epsilon_b'] = np.copy(e)
-        #self.qed_wfn = psi4.core.Wavefunction.from_file(wfn_dict)
 
     def summary(self):
         print(f"RHF Energy:           {self.rhf_energy:.8f} Ha")
@@ -253,8 +240,8 @@ class CQEDRHFCalculator:
         return self.scf_grad
     
     def hilber_quadrupole_gradient(self):
-        # instantiate mints
-        mints = psi4.core.MintsHelper(self.psi4_wfn.basisset())
+        
+        
         C_origin = [0.0, 0.0, 0.0] # origin
         maxorder = 2 # quadrupole
         D = self.density_matrix * 2
@@ -266,7 +253,7 @@ class CQEDRHFCalculator:
         D = psi4.core.Matrix.from_array(D)
         
         # 3N x 9 matrix of quadrupole derivatives
-        quad_grad = np.asarray(mints.multipole_grad(D, maxorder, C_origin))
+        quad_grad = np.asarray(self.mints.multipole_grad(D, maxorder, C_origin))
         
         # get requested component of quadrupole gradient
         zzdir = 8 # zz component
@@ -300,60 +287,8 @@ class CQEDRHFCalculator:
 
         print(self.o_dse_gradient.reshape(self.num_atoms, 3))
 
-
-    def calc_dipole_dipole_gradient(self):
-        """ Calculate the dipole-dipole gradient using the CQED-RHF results.
-        Returns:
-            numpy.ndarray: The dipole-dipole gradient as a numpy array.
-        """
-        # instantiate mints
-        mints = psi4.core.MintsHelper(self.psi4_wfn.basisset())
-
-        self.K_dse_gradient = np.zeros(3 * self.num_atoms)
-
-        # get the x, y, and z components of exchange contribution
-        Da = self.density_matrix
-        Db = self.density_matrix
-
-        # D(p,q) = - mu(r,s) [ Da(p,r)Da(s,q) + Db(p,r) Da(s,q) ] ####
-        # these are the density matrices contracted with the different dipole components
-        tmp_a_x = -oe.contract("rs, pr, sq -> pq", self.dipole_so_x, Da, Da, optimize="optimal")
-        tmp_a_y = -oe.contract("rs, pr, sq -> pq", self.dipole_so_y, Da, Da, optimize="optimal")
-        tmp_a_z = -oe.contract("rs, pr, sq -> pq", self.dipole_so_z, Da, Da, optimize="optimal")
-        tmp_b_x = -oe.contract("rs, pr, sq -> pq", self.dipole_so_x, Db, Da, optimize="optimal")
-        tmp_b_y = -oe.contract("rs, pr, sq -> pq", self.dipole_so_y, Db, Da, optimize="optimal")
-        tmp_b_z = -oe.contract("rs, pr, sq -> pq", self.dipole_so_z, Db, Da, optimize="optimal")
-
-        # sum together the components 
-        D_x = tmp_a_x + tmp_b_x
-        D_y = tmp_a_y + tmp_b_y
-        D_z = tmp_a_z + tmp_b_z
-
-        # symmetrize D
-        D_x = 0.5 * (D_x + oe.contract("rs->sr", D_x, optimize="optimal"))
-        D_y = 0.5 * (D_y + oe.contract("rs->sr", D_y, optimize="optimal"))
-        D_z = 0.5 * (D_z + oe.contract("rs->sr", D_z, optimize="optimal"))
-
-        # cast as psi4 arrays
-        Dp4_x = psi4.core.Matrix.from_array(D_x)
-        Dp4_y = psi4.core.Matrix.from_array(D_y)
-        Dp4_z = psi4.core.Matrix.from_array(D_z)
-
-        # get the dipole-dipole gradient
-        tmp_x = np.asarray(mints.dipole_grad(Dp4_x))
-        tmp_y = np.asarray(mints.dipole_grad(Dp4_y))
-        tmp_z = np.asarray(mints.dipole_grad(Dp4_z))
-
-        # loop over atoms
-        for atom in range(self.num_atoms):
-            for cart in range(3):
-                deriv_index = 3 * atom + cart
-
-                # calculate the gradient components
-                self.K_dse_gradient[deriv_index] += self.lambda_vector[2] ** 2 * tmp_z[deriv_index, 2]
-
     
-    def calc_dipole_dipole_gradient_2(self):
+    def calc_dipole_dipole_gradient(self):
         """
         NEEDS COMPLETING: Method to compute the two-electron integral gradient terms
 
@@ -372,8 +307,6 @@ class CQEDRHFCalculator:
         To compute the two-electron integral gradient terms, we need the two-electron integrals and the nuclear repulsion gradient.
         We will get these from a converged Hartree-Fock calculation.
         """
-        # instantiate mints
-        mints = psi4.core.MintsHelper(self.psi4_wfn.basisset())
 
         # initialize the two-electron integrals derivative matrices
         n_atoms = self.num_atoms
@@ -384,9 +317,6 @@ class CQEDRHFCalculator:
         K_dse_deriv = np.zeros((3 * n_atoms, n_orbitals, n_orbitals))
         self.K_dse_gradient = np.zeros(3 * n_atoms)
 
-        # get the dipole integral derivatives
-        #dipole_derivs = np.asarray(mints.ao_elec_dip_deriv1())
-        
 
         d_matrix = self.d_ao
 
@@ -396,7 +326,7 @@ class CQEDRHFCalculator:
         # loop over all of the atoms
         for atom_index in range(n_atoms):
             # Derivatives with respect to x, y, and z of the current atom
-            _dip_deriv = np.asarray(mints.ao_elec_dip_deriv1(atom_index))
+            _dip_deriv = np.asarray(self.mints.ao_elec_dip_deriv1(atom_index))
             for cart_index in range(3):
                 deriv_index = 3 * atom_index + cart_index
 
@@ -420,8 +350,6 @@ class CQEDRHFCalculator:
                 # we only performed this for Da Da, we need to multiply by 2 to account for the beta density matrix
                 self.K_dse_gradient[deriv_index] = 2 * oe.contract("uv, uv->", D, K_dse_deriv[deriv_index, :, :], optimize="optimal")
 
-        # add code to return the J_gradient and K_gradient
-        
 
 
     def calc_numerical_gradient(self, delta=1.0e-5):
@@ -439,13 +367,7 @@ class CQEDRHFCalculator:
         # copy original molecule string
         original_molecule_string = self.molecule_string
         self.numerical_energy_gradient = np.zeros(self.num_atoms * 3)
-        self.numerical_kinetic_gradient = np.zeros(self.num_atoms * 3)
-        self.numerical_potential_gradient = np.zeros(self.num_atoms * 3)
-        self.numerical_J_gradient = np.zeros(self.num_atoms * 3)
-        self.numerical_K_gradient = np.zeros(self.num_atoms * 3)
-        self.numerical_o_dse_gradient = np.zeros(self.num_atoms * 3)
-        self.numerical_K_dse_gradient = np.zeros(self.num_atoms * 3)
-        self.numerical_scf_gradient = np.zeros(self.num_atoms * 3)
+
 
         # converstion from Angstroms to Bohr
         ang_to_Bohr = 1 / 0.52917721092  # convert Angstroms to Bohr
@@ -453,39 +375,22 @@ class CQEDRHFCalculator:
 
         for i in range(self.num_atoms):
             for j in range(3):
+
+                # forward step
                 _displacement = np.zeros((self.num_atoms, 3))
                 _displacement[i, j] = delta
                 self.molecule_string = self.modify_geometry_string(original_molecule_string, _displacement)
                 self.calc_cqed_rhf_energy()
                 energy_plus = self.cqed_rhf_energy
-                o_dse_plus = self.o_dse_energy
-                K_dse_plus = self.K_dse_energy
-                T_plus = self.kinetic_energy
-                V_plus = self.potential_energy
-                J_plus = self.J_energy
-                K_plus = self.K_energy
-                scf_en_plus = self.rhf_energy_no_cav
 
+                # backward step
                 self.molecule_string = self.modify_geometry_string(original_molecule_string, -_displacement)
                 self.calc_cqed_rhf_energy()
                 energy_minus = self.cqed_rhf_energy
-                o_dse_minus = self.o_dse_energy
-                K_dse_minus = self.K_dse_energy
-                scf_en_minus = self.rhf_energy_no_cav
-                T_minus = self.kinetic_energy
-                V_minus = self.potential_energy
-                J_minus = self.J_energy
-                K_minus = self.K_energy
 
-
+                # compute gradient element
                 self.numerical_energy_gradient[i * 3 + j] = (energy_plus - energy_minus) / (2 * delta * ang_to_Bohr)
-                self.numerical_o_dse_gradient[i * 3 + j] = (o_dse_plus - o_dse_minus) / (2 * delta * ang_to_Bohr)
-                self.numerical_K_dse_gradient[i * 3 + j] = (K_dse_plus - K_dse_minus) / (2 * delta * ang_to_Bohr)
-                self.numerical_scf_gradient[i * 3 + j] = (scf_en_plus - scf_en_minus) / (2 * delta * ang_to_Bohr)
-                self.numerical_kinetic_gradient[i * 3 + j] = (T_plus - T_minus) / (2 * delta * ang_to_Bohr)
-                self.numerical_potential_gradient[i * 3 + j] = (V_plus - V_minus) / (2 * delta * ang_to_Bohr)
-                self.numerical_J_gradient[i * 3 + j] = (J_plus - J_minus) / (2 * delta * ang_to_Bohr)
-                self.numerical_K_gradient[i * 3 + j] = (K_plus - K_minus) / (2 * delta * ang_to_Bohr)
+
 
     def modify_geometry_string(self, geometry_string, displacement_array):
         """
@@ -585,8 +490,6 @@ class CQEDRHFCalculator:
         To compute the Fock matrix in the MO basis, we need the one-electron and two-electron integrals and the density matrix.
         We will get these from a converged Hartree-Fock calculation.
         """
-        # instantiate mints
-        mints = psi4.core.MintsHelper(self.psi4_wfn.basisset())
 
         # get the number of atoms and orbitals
         n_atoms = self.num_atoms
@@ -610,7 +513,7 @@ class CQEDRHFCalculator:
                 deriv_index = 3 * atom_index + cart_index
 
                 # Get overlap derivatives for this atom and Cartesian component
-                overlap_derivs[deriv_index, :, :] = np.asarray(mints.mo_oei_deriv1("OVERLAP", atom_index, C, C)[cart_index])
+                overlap_derivs[deriv_index, :, :] = np.asarray(self.mints.mo_oei_deriv1("OVERLAP", atom_index, C, C)[cart_index])
                 self.canonical_overlap_gradient[deriv_index] = -2.0 * oe.contract('ii,ii->', self.canonical_fock_matrix_mo[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal')
                 self.overlap_gradient[deriv_index] = -2.0 * oe.contract('ii,ii->', self.fock_matrix_mo[:n_docc, :n_docc], overlap_derivs[deriv_index, :n_docc, :n_docc], optimize='optimal') 
 
@@ -635,9 +538,6 @@ class CQEDRHFCalculator:
         We will get these from a converged Hartree-Fock calculation.
         """
 
-        # instantiate mints
-        mints = psi4.core.MintsHelper(self.psi4_wfn.basisset())
-
         # get the number of atoms and orbitals
         n_atoms = self.num_atoms
         n_orbitals = self.n_orbitals
@@ -658,8 +558,8 @@ class CQEDRHFCalculator:
                 deriv_index = 3 * atom_index + cart_index
 
                 # get the one-electron integral derivatives
-                kinetic_derivs[deriv_index] = np.asarray(mints.ao_oei_deriv1("KINETIC", atom_index)[cart_index])
-                potential_derivs[deriv_index] = np.asarray(mints.ao_oei_deriv1("POTENTIAL", atom_index)[cart_index])
+                kinetic_derivs[deriv_index] = np.asarray(self.mints.ao_oei_deriv1("KINETIC", atom_index)[cart_index])
+                potential_derivs[deriv_index] = np.asarray(self.mints.ao_oei_deriv1("POTENTIAL", atom_index)[cart_index])
 
                 # add code to contract kinetic_derivs with D, multiply by 2 since self.density_matrix is alpha only
                 self.kinetic_gradient[deriv_index] = 2 * oe.contract("uv,uv->", self.density_matrix, kinetic_derivs[deriv_index, :, :], optimize='optimal')
@@ -690,15 +590,11 @@ class CQEDRHFCalculator:
         # get the number of orbitals and the number of doubly occupied orbitals
         n_orbitals = self.n_orbitals
         n_atoms = self.num_atoms
-        n_docc = self.ndocc
-
 
 
         # define D = 2 * sum_i C_pi * C_qi
         D = 2 * self.density_matrix
 
-        # instantiate the MintsHelper object
-        mints = psi4.core.MintsHelper(self.psi4_wfn.basisset())
 
         # initialize the two-electron integrals derivative matrices
         eri_derivs = np.zeros((3 * n_atoms, n_orbitals, n_orbitals, n_orbitals, n_orbitals))
@@ -715,7 +611,7 @@ class CQEDRHFCalculator:
 
 
                 # get the two-electron integral derivatives
-                eri_derivs[deriv_index] = np.asarray(mints.ao_tei_deriv1(atom_index)[cart_index])
+                eri_derivs[deriv_index] = np.asarray(self.mints.ao_tei_deriv1(atom_index)[cart_index])
 
                 # add code to contract eri_derivs with D to get J_deriv. J_uv = 2 * sum_ls (uv|ls) D_ls 
                 # note we are factoring the 2 into D here
