@@ -633,34 +633,92 @@ class CQEDRHFCalculator:
                 # add code to contract K_deriv with D to get K_gradient
                 self.K_gradient[atom_index, cart_index] = 1 / 2 * oe.contract("uv,uv->", D, K_deriv[deriv_index, :, :], optimize="optimal")
 
+
+
     def compute_analytic_gradient(self, use_psi4=False):
-        """ Method to compute the term-by-term analytic gradient for the CQED-RHF energy.
+        """Compute the term-by-term analytic gradient for the CQED-RHF energy.
         
-        if use_psi4=False, then the method will compute the gradient using the methods defined in this class.
-        if use_psi4=True, then the method will use psi4's built-in scfgrad function to compute the canonical
-        gradient terms and only call methods of this class for the dipole_dipole and quadrupole gradient terms.
-         
+        Parameters
+        ----------
+        use_psi4 : bool, optional
+            If False (default), the method computes the gradient using internal methods.
+            If True, the method uses Psi4’s built-in SCF gradient and adds CQED-specific
+            corrections (dipole-dipole and quadrupole gradients).
+        
+        Notes
+        -----
+        Timing for each computational step is printed to standard output.
         """
+        start_total = time.time()
+
         if use_psi4:
+            t0 = time.time()
             self.compute_scf_gradient(qed_wfn=True)
+            print(f"Time for SCF gradient via Psi4: {time.time() - t0:.3e} s")
+
+            t1 = time.time()
             self.compute_quadrupole_gradient()
+            print(f"Time for Quadrupole gradient: {time.time() - t1:.3e} s")
+
+            t2 = time.time()
             self.compute_dipole_dipole_gradient()
+            print(f"Time Dipole-dipole gradient: {time.time() - t2:.3e} s")
+
             self.qed_rhf_gradient = self.scf_grad + self.o_dse_gradient + self.K_dse_gradient
+            print(f"Final gradient assembly using psi4: {time.time() - t0:.3e} s")
 
         else:
+            t0 = time.time()
             self.compute_fock_matrix_term()
+            print(f"Time for Fock matrix term: {time.time() - t0:.3e} s")
+
+            t1 = time.time()
             self.compute_one_electron_integral_gradient_terms()
+            print(f"Time for One-electron gradient terms: {time.time() - t1:.3e} s")
+
+            t2 = time.time()
             self.compute_two_electron_integral_gradient_terms()
+            print(f"Time for Two-electron gradient terms: {time.time() - t2:.3e} s")
+
+            t3 = time.time()
             self.compute_nuclear_repulsion_gradient()
+            print(f"Time for Nuclear repulsion gradient: {time.time() - t3:.3e} s")
+
+            t4 = time.time()
             self.compute_dipole_dipole_gradient()
+            print(f"Time for Dipole-dipole gradient: {time.time() - t4:.3e} s")
+
+            t5 = time.time()
             self.compute_quadrupole_gradient()
-            # sum together the different contributions to get the total canonical gradient
-            self.canonical_scf_gradient = self.overlap_gradient + self.kinetic_gradient + self.potential_gradient + self.J_gradient + self.K_gradient + self.nuclear_repulsion_gradient
+            print(f"Time for Quadrupole gradient: {time.time() - t5:.3e} s")
+            print(f"Final gradient assembly using class: {time.time() - t0:.3e} s")
+
+            # Final gradient assembly
+
+            self.canonical_scf_gradient = (
+                self.overlap_gradient +
+                self.kinetic_gradient +
+                self.potential_gradient +
+                self.J_gradient +
+                self.K_gradient +
+                self.nuclear_repulsion_gradient
+            )
             self.qedrhf_gradient = self.canonical_scf_gradient + self.K_dse_gradient + self.o_dse_gradient
 
+
+
+
+
     def gradient_summary(self):
+        # time each step
+        time_start = time.time()
         self.compute_analytic_gradient(use_psi4=False)
+        time_end = time.time()
+        #print(f"Time to compute analytic CQED-RHF gradient: {time_end - time_start:.4f} seconds\n")
+        time_start = time.time()
         self.compute_numerical_gradient()
+        time_end = time.time()
+        print(f"Time to compute numerical CQED-RHF gradient: {time_end - time_start:.4f} seconds\n")
         print(f"Analytical CQED-RHF Gradient:\n")
         print(self.qedrhf_gradient)
         print(f"\nNumerical CQED-RHF Gradient:\n")
@@ -668,8 +726,11 @@ class CQEDRHFCalculator:
         difference = self.qedrhf_gradient - self.numerical_energy_gradient
         diff_norm = np.linalg.norm(difference)
         print(f"\nDifference between analytical and numerical gradient: {diff_norm:.4e}\n")
-
+        print("Using Psi4 to compute the canonical RHF gradient for comparison...\n")
+        time_start = time.time()
         self.compute_analytic_gradient(use_psi4=True)
+        time_end = time.time()
+        #print(f"Time to compute analytic CQED-RHF gradient using Psi4: {time_end - time_start:.4f} seconds\n")
         print(F"Analytical Canonical Gradient:\n")
         print(self.canonical_scf_gradient)
         print(f"Analytical Canonical Gradient using Psi4:\n")
