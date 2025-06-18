@@ -142,7 +142,8 @@ class CQEDRHFCalculator:
         else:
             psi4.core.clean()
             raise Exception("Maximum number of SCF cycles exceeded.")
-        
+        # store energy
+        self.cqed_rhf_energy = E_scf
         # update the electronic dipole expectation value with the converged density matrix
         mu_exp = np.array([
             2 * oe.contract("pq,pq->", mu_ao[i], D, optimize='optimal') for i in range(3)
@@ -218,7 +219,6 @@ class CQEDRHFCalculator:
             self.scf_grad = np.asarray(psi4.core.scfgrad(self.psi4_wfn))
 
         
-        return self.scf_grad
     
     def hilber_quadrupole_gradient(self):
         
@@ -506,7 +506,7 @@ class CQEDRHFCalculator:
         
 
         # overlap gradient will have shape (n_atoms, 3) like psi4
-        self.canonical_overlap_gradient = np.zeros(3 * n_atoms) # uses the Fock matrix without QED terms
+        self.canonical_overlap_gradient = np.zeros((n_atoms, 3)) # uses the Fock matrix without QED terms
         self.overlap_gradient = np.zeros((n_atoms, 3)) # uses the Fock matrix with QED terms
 
 
@@ -667,7 +667,7 @@ class CQEDRHFCalculator:
         print(self.numerical_energy_gradient)
         difference = self.qedrhf_gradient - self.numerical_energy_gradient
         diff_norm = np.linalg.norm(difference)
-        print(f"\nDifference between analytical and numerical gradient: {diff_norm:.8f}\n")
+        print(f"\nDifference between analytical and numerical gradient: {diff_norm:.4e}\n")
 
         self.compute_analytic_gradient(use_psi4=True)
         print(F"Analytical Canonical Gradient:\n")
@@ -676,7 +676,7 @@ class CQEDRHFCalculator:
         print(self.scf_grad)
         difference = self.canonical_scf_gradient - self.scf_grad
         diff_norm = np.linalg.norm(difference)
-        print(f"\nDifference between analytical and Psi4 canonical gradient: {diff_norm:.8f}\n")
+        print(f"\nDifference between analytical and Psi4 canonical gradient: {diff_norm:.4e}\n")
 
 
     def export_to_json(self, filename):
