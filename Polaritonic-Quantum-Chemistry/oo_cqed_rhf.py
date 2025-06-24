@@ -3,6 +3,8 @@ import numpy as np
 import time
 import json
 import opt_einsum as oe
+import tensorflow as tf
+print(tf.config.list_physical_devices('GPU'))
 
 class CQEDRHFCalculator:
     def __init__(self, lambda_vector, molecule_string, psi4_options):
@@ -584,8 +586,11 @@ class CQEDRHFCalculator:
         n_orbitals = self.n_orbitals
         n_atoms = self.num_atoms
 
-        D_psi4 = self.density_matrix_psi4 # Use the psi4.core.Matrix version of D
+        #D_psi4 = self.density_matrix_psi4 # Use the psi4.core.Matrix version of D
         D_np = self.density_matrix * 2
+        D_tf = tf.convert_to_tensor(D_np, dtype=tf.float64)  # use float64 if needed
+
+
 
         self.J_gradient = np.zeros((n_atoms, 3))
         self.K_gradient = np.zeros((n_atoms, 3))
@@ -593,60 +598,39 @@ class CQEDRHFCalculator:
         # --- REVISED PART 1: Getting ERI derivatives without NumPy conversion (initially) ---
         # Store eri_derivs as a list of lists of psi4.core.Matrix objects
         # eri_derivs_psi4[atom_idx][cart_idx] will be a psi4.core.Matrix of shape (n_orb^2, n_orb^2)
-        eri_derivs_psi4 = []
+
+        # eri derivatives in one numpy array
+        #eri_derivs_np = np.zeros((n_atoms, 3, n_orbitals, n_orbitals, n_orbitals, n_orbitals))
+        #J_deriv_np = np.zeros((n_atoms, 3, n_orbitals, n_orbitals))
+        #K_deriv_np = np.zeros((n_atoms, 3, n_orbitals, n_orbitals))
+
+        #for atom_index in range(n_atoms):
+        #    # ao_tei_deriv1 returns a list of 3 psi4.core.Matrix objects (X, Y, Z)
+        #    eri_derivs_np[atom_index, :, :, :, :, :] = np.asarray(self.mints.ao_tei_deriv1(atom_index))
+        #    J_deriv_np[atom_index, :, :, :] = oe.contract("xuvls,ls->xuv", eri_derivs_np[atom_index, :, :, :, :], D_np, optimize="optimal")
+        #    K_deriv_np[atom_index, :, :, :] = -0.5 * oe.contract("xulvs,ls->xuv", eri_derivs_np[atom_index, :, :, :, :], D_np, optimize="optimal")
+        #    self.J_gradient[atom_index, :] = 0.5 * oe.contract("uv,xuv->x", D_np, J_deriv_np[atom_index, :, :, :], optimize="optimal")
+        #    self.K_gradient[atom_index, :] = 0.5 * oe.contract("uv,xuv->x", D_np, K_deriv_np[atom_index, :, :, :], optimize="optimal")
         for atom_index in range(n_atoms):
-            # ao_tei_deriv1 returns a list of 3 psi4.core.Matrix objects (X, Y, Z)
-            atom_deriv_list = self.mints.ao_tei_deriv1(atom_index)
-            eri_derivs_psi4.append(atom_deriv_list)
+            eri_deriv = np.asarray(self.mints.ao_tei_deriv1(atom_index))  # shape (3, n, n, n, n)
+            
+            # convert to tensorflow array 
+            eri_tf = tf.convert_to_tensor(eri_deriv, dtype=tf.float64)
 
+            J_grad = 0.5 * tf.einsum("uv,xuvls,ls->x", D_tf, eri_tf, D_tf)
+            K_grad = -0.25 * tf.einsum("uv,xulvs,ls->x", D_tf, eri_tf, D_tf)
 
+            self.J_gradient[atom_index, :] = J_grad.numpy()
+            self.K_gradient[atom_index, :] = K_grad.numpy()
 
-        for atom_index in range(n_atoms):
-            for cart_index in range(3):
-                deriv_index = 3 * atom_index + cart_index
+            #self.J_gradient[atom_index, :] = 0.5 * oe.contract(
+            #    "uv,xuvls,ls->x", D_np, eri_deriv, D_np, optimize="optimal"
+            #)
 
-                # Get the specific ERI derivative matrix for this (atom, cart)
-                # This is a (n_orbitals^2, n_orbitals^2) psi4.core.Matrix
-                current_eri_deriv_psi4 = eri_derivs_psi4[atom_index][cart_index]
+            #self.K_gradient[atom_index, :] = -0.25 * oe.contract(
+            #    "uv,xulvs,ls->x", D_np, eri_deriv, D_np, optimize="optimal"
+            #)
 
-                # --- This is the key challenge: The einsum contraction ---
-                # J_uv = 2 * sum_ls (uv|ls) D_ls
-                # K_uv = -1 * sum_ls (ul|vs) D_ls
-                # Psi4's MintsHelper does NOT have methods like ao_eri_contract_density()
-                # for *derivatives*. It only has it for the regular ERIs (ao_jk).
-
-                # Therefore, for these specific contractions (oe.contract),
-                # you will *still need to convert to NumPy* for the ERI derivatives
-                # and the density matrix if it's not already NumPy.
-                # The memory benefit comes from processing them one by one,
-                # NOT storing the entire 5D eri_derivs array.
-
-                # Convert to NumPy for the contraction, then discard
-                eri_deriv_np = np.asarray(current_eri_deriv_psi4).reshape(n_orbitals, n_orbitals, n_orbitals, n_orbitals)
-
-
-                # Perform the contractions with NumPy/Opt_einsum
-                J_deriv_np = oe.contract("uvls,ls->uv", eri_deriv_np, D_np, optimize="optimal")
-                K_deriv_np = -0.5 * oe.contract("ulvs,ls->uv", eri_deriv_np, D_np, optimize="optimal")
-
-                # You can convert J_deriv_np and K_deriv_np back to psi4.core.Matrix if needed for later psi4 ops
-                # But for the final gradient contraction, NumPy is fine.
-                #J_deriv_psi4 = psi4.core.Matrix.from_numpy(J_deriv_np)
-                #K_deriv_psi4 = psi4.core.Matrix.from_numpy(K_deriv_np)
-
-                #J_deriv_list.append(J_deriv_psi4)
-                #K_deriv_list.append(K_deriv_psi4)
-
-                # Final contractions for gradients (these are trace-like, so NumPy is efficient)
-                self.J_gradient[atom_index, cart_index] = 0.5 * oe.contract("uv,uv->", D_np, J_deriv_np, optimize="optimal")
-                self.K_gradient[atom_index, cart_index] = 0.5 * oe.contract("uv,uv->", D_np, K_deriv_np, optimize="optimal")
-
-
-        # Now J_deriv_list and K_deriv_list contain psi4.core.Matrix objects for each deriv_index
-        # You would access them as J_deriv_list[3 * atom_index + cart_index]
-        # and if you need them as a 5D NumPy array, you'd convert here:
-        # J_deriv = np.array([np.asarray(m).reshape(n_orbitals, n_orbitals) for m in J_deriv_list])
-        # K_deriv = np.array([np.asarray(m).reshape(n_orbitals, n_orbitals) for m in K_deriv_list])
 
     def compute_two_electron_integral_gradient_terms(self):
         """
