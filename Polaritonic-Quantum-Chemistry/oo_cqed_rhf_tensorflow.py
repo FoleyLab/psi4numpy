@@ -3,7 +3,8 @@ import numpy as np
 import time
 import json
 import opt_einsum as oe
-
+import tensorflow as tf
+print(tf.config.list_physical_devices('GPU'))
 
 class CQEDRHFCalculator:
     def __init__(self, lambda_vector, molecule_string, psi4_options):
@@ -145,7 +146,6 @@ class CQEDRHFCalculator:
             raise Exception("Maximum number of SCF cycles exceeded.")
         # store energy
         self.cqed_rhf_energy = E_scf
-
         # update the electronic dipole expectation value with the converged density matrix
         mu_exp = np.array([
             2 * oe.contract("pq,pq->", mu_ao[i], D, optimize='optimal') for i in range(3)
@@ -227,7 +227,36 @@ class CQEDRHFCalculator:
         else:
             self.scf_grad = np.asarray(psi4.core.scfgrad(self.psi4_wfn))
 
+        
+    
+    def hilber_quadrupole_gradient(self):
+        
+        
+        C_origin = [0.0, 0.0, 0.0] # origin
+        maxorder = 2 # quadrupole
+        D = self.density_matrix * 2
+        natom = self.num_atoms
+        lambda_z = self.lambda_vector[2] # z-component of lambda vector
+        
+        # symmetrize D because dipole_grad only uses 1/2 the elements
+        D = 0.5 * ( D + np.einsum('rs->sr',D) )
+        D = psi4.core.Matrix.from_array(D)
+        
+        # 3N x 9 matrix of quadrupole derivatives
+        quad_grad = np.asarray(self.mints.multipole_grad(D, maxorder, C_origin))
+        
+        # get requested component of quadrupole gradient
+        zzdir = 8 # zz component
 
+        # unpack zz-component 3N x 3 matrix (the 9th column)
+        dse_gradient_zz = np.zeros((natom,3))
+        for atom in range (0,natom):
+            for cart in range (0,3):
+                dse_gradient_zz[atom,cart] = quad_grad[atom*3+cart,zzdir]
+        
+        self.hilbert_o_dse = dse_gradient_zz * -0.5 * lambda_z * lambda_z
+
+    
     def compute_quadrupole_gradient(self):
         """ Calculate the quadrupole gradient using the CQED-RHF results.
         Returns:
@@ -240,9 +269,13 @@ class CQEDRHFCalculator:
         # define max_order = 2
         max_order = 2  # dipole and quadrupole
 
-        # get the density matrix as a psi4 core Matrix 
-        Dp4 = self.density_matrix_psi4
+        # symmetrize the density matrix
+        #D = 0.5 * (self.density_matrix + oe.contract('rs->sr', self.density_matrix, optimize="optimal"))
 
+        # cast as Psi4 matrix.  Also multiply by 2 to account for alpha and beta density matrices
+        #Dp4 = psi4.core.Matrix.from_array(2 * D)
+        #self.density_matrix_psi4 = Dp4
+        Dp4 = self.density_matrix_psi4
         # get the multipole gradient
         self.multipole_grad = np.asarray(self.mints.multipole_grad(Dp4, max_order, c_origin))
 
@@ -259,6 +292,8 @@ class CQEDRHFCalculator:
                 self.o_dse_gradient[atom_index,cart_index] -= self.lambda_vector[0] * self.lambda_vector[1] * self.multipole_grad[deriv_index, 4]
                 self.o_dse_gradient[atom_index,cart_index] -= self.lambda_vector[0] * self.lambda_vector[2] * self.multipole_grad[deriv_index, 5]
                 self.o_dse_gradient[atom_index,cart_index] -= self.lambda_vector[1] * self.lambda_vector[2] * self.multipole_grad[deriv_index, 7]
+
+        
 
     
     def compute_dipole_dipole_gradient(self):
@@ -294,7 +329,7 @@ class CQEDRHFCalculator:
 
         d_matrix = self.d_ao
 
-        # This is the alpha density matrix                                   
+        # need to think if this should be multiplied by 2 for alpha and beta!!!                                    
         D = self.density_matrix
 
         # loop over all of the atoms
