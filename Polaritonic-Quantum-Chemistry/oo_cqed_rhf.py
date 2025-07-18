@@ -27,6 +27,53 @@ class CQEDRHFCalculator:
         self.wfn = None
         self.qed_wfn = None
 
+    def calc_force_and_energy(self, geometry_string, use_psi4_scf_grad=True):
+        """
+        Calculate the force and energy using the CQED-RHF method.
+        
+        Args:
+            geometry_string (str): The molecular geometry in Psi4 format.
+            use_psi4 (bool): Whether to use psi4.scf_grad for the canonical RHF gradient terms (uses density fitting) - default is True.
+        
+        Returns:
+            tuple: A tuple containing the energy and force as numpy arrays.
+        """
+        # set the molecule string and calculate the CQED-RHF energy
+        self.molecule_string = geometry_string
+        self.calc_cqed_rhf_energy() # calculate the CQED-RHF energy at current geometry
+        _qed_rhf_energy = self.cqed_rhf_energy
+ 
+        # get the gradient 
+        if use_psi4_scf_grad:
+            # use scf_grad to compute the canonical gradient terms and only compute the O_DSE and K_DSE terms ourselves
+            self.compute_scf_gradient(qed_wfn=True)
+            self.compute_quadrupole_gradient()
+            self.compute_dipole_dipole_gradient()
+            _qed_rhf_grad = self.scf_grad + self.o_dse_gradient + self.K_dse_gradient
+
+        else:
+            # need to calculate all terms ourselves
+            self.compute_fock_matrix_term()
+            self.compute_one_electron_integral_gradient_terms()
+            self.compute_two_electron_integral_gradient_terms()
+            self.compute_nuclear_repulsion_gradient()
+            self.compute_dipole_dipole_gradient()
+            self.compute_quadrupole_gradient()
+            _qed_rhf_grad = (
+                self.overlap_gradient +
+                self.kinetic_gradient +
+                self.potential_gradient +
+                self.J_gradient +
+                self.K_gradient +
+                self.nuclear_repulsion_gradient
+            )
+
+        # return a tuple of the energy and gradient
+        return _qed_rhf_energy, _qed_rhf_grad
+                             
+        
+    
+
     def calc_cqed_rhf_energy(self):
 
         # define molecule and options
@@ -547,59 +594,61 @@ class CQEDRHFCalculator:
                 self.potential_gradient[atom_index, cart_index] = 2 * oe.contract("uv,uv->", self.density_matrix, potential_derivs[deriv_index, :, :], optimize='optimal')
 
 
-    def compute_two_electron_integral_gradient_terms_2(self):
+    
+    def compute_two_electron_integral_gradient_terms(self):
         n_orbitals = self.n_orbitals
         n_atoms = self.num_atoms
 
-        #D_psi4 = self.density_matrix_psi4 # Use the psi4.core.Matrix version of D
+        # Density matrix as a numpy array
         D_np = self.density_matrix * 2
-        D_tf = tf.convert_to_tensor(D_np, dtype=tf.float64)  # use float64 if needed
 
-
-
+        # initialize the J and K gradients
         self.J_gradient = np.zeros((n_atoms, 3))
         self.K_gradient = np.zeros((n_atoms, 3))
 
         # --- REVISED PART 1: Getting ERI derivatives without NumPy conversion (initially) ---
         # Store eri_derivs as a list of lists of psi4.core.Matrix objects
         # eri_derivs_psi4[atom_idx][cart_idx] will be a psi4.core.Matrix of shape (n_orb^2, n_orb^2)
-
-        # eri derivatives in one numpy array
-        #eri_derivs_np = np.zeros((n_atoms, 3, n_orbitals, n_orbitals, n_orbitals, n_orbitals))
-        #J_deriv_np = np.zeros((n_atoms, 3, n_orbitals, n_orbitals))
-        #K_deriv_np = np.zeros((n_atoms, 3, n_orbitals, n_orbitals))
-
-        #for atom_index in range(n_atoms):
-        #    # ao_tei_deriv1 returns a list of 3 psi4.core.Matrix objects (X, Y, Z)
-        #    eri_derivs_np[atom_index, :, :, :, :, :] = np.asarray(self.mints.ao_tei_deriv1(atom_index))
-        #    J_deriv_np[atom_index, :, :, :] = oe.contract("xuvls,ls->xuv", eri_derivs_np[atom_index, :, :, :, :], D_np, optimize="optimal")
-        #    K_deriv_np[atom_index, :, :, :] = -0.5 * oe.contract("xulvs,ls->xuv", eri_derivs_np[atom_index, :, :, :, :], D_np, optimize="optimal")
-        #    self.J_gradient[atom_index, :] = 0.5 * oe.contract("uv,xuv->x", D_np, J_deriv_np[atom_index, :, :, :], optimize="optimal")
-        #    self.K_gradient[atom_index, :] = 0.5 * oe.contract("uv,xuv->x", D_np, K_deriv_np[atom_index, :, :, :], optimize="optimal")
+        eri_derivs_psi4 = []
         for atom_index in range(n_atoms):
-            eri_deriv = np.asarray(self.mints.ao_tei_deriv1(atom_index))  # shape (3, n, n, n, n)
-            
-            # convert to tensorflow array 
-            eri_tf = tf.convert_to_tensor(eri_deriv, dtype=tf.float64)
+            # ao_tei_deriv1 returns a list of 3 psi4.core.Matrix objects (X, Y, Z)
+            atom_deriv_list = self.mints.ao_tei_deriv1(atom_index)
+            eri_derivs_psi4.append(atom_deriv_list)
 
-            J_grad = 0.5 * tf.einsum("uv,xuvls,ls->x", D_tf, eri_tf, D_tf)
-            K_grad = -0.25 * tf.einsum("uv,xulvs,ls->x", D_tf, eri_tf, D_tf)
+        for atom_index in range(n_atoms):
+            for cart_index in range(3):
 
-            self.J_gradient[atom_index, :] = J_grad.numpy()
-            self.K_gradient[atom_index, :] = K_grad.numpy()
+                # Get the specific ERI derivative matrix for this (atom, cart)
+                # This is a (n_orbitals^2, n_orbitals^2) psi4.core.Matrix
+                current_eri_deriv_psi4 = eri_derivs_psi4[atom_index][cart_index]
 
-            #self.J_gradient[atom_index, :] = 0.5 * oe.contract(
-            #    "uv,xuvls,ls->x", D_np, eri_deriv, D_np, optimize="optimal"
-            #)
+                # --- This is the key challenge: The einsum contraction ---
+                # J_uv = sum_ls (uv|ls) D_ls
+                # K_uv = -1 / 2 * sum_ls (ul|vs) D_ls
+                # Psi4's MintsHelper does NOT have methods like ao_eri_contract_density()
+                # for *derivatives*. It only has it for the regular ERIs (ao_jk).
 
-            #self.K_gradient[atom_index, :] = -0.25 * oe.contract(
-            #    "uv,xulvs,ls->x", D_np, eri_deriv, D_np, optimize="optimal"
-            #)
+                # Therefore, for these specific contractions (oe.contract),
+                # you will *still need to convert to NumPy* for the ERI derivatives
+                # and the density matrix if it's not already NumPy.
+                # The memory benefit comes from processing them one by one,
+                # NOT storing the entire 5D eri_derivs array.
+
+                # Convert to NumPy for the contraction, then discard
+                eri_deriv_np = np.asarray(current_eri_deriv_psi4).reshape(n_orbitals, n_orbitals, n_orbitals, n_orbitals)
+
+                # Perform the contractions with NumPy/Opt_einsum
+                J_deriv_np = oe.contract("uvls,ls->uv", eri_deriv_np, D_np, optimize="optimal")
+                K_deriv_np = -0.5 * oe.contract("ulvs,ls->uv", eri_deriv_np, D_np, optimize="optimal")
+
+                # Final contractions for gradients (these are trace-like, so NumPy is efficient)
+                self.J_gradient[atom_index, cart_index] = 0.5 * oe.contract("uv,uv->", D_np, J_deriv_np, optimize="optimal")
+                self.K_gradient[atom_index, cart_index] = 0.5 * oe.contract("uv,uv->", D_np, K_deriv_np, optimize="optimal")
 
 
-    def compute_two_electron_integral_gradient_terms(self):
+    def compute_two_electron_integral_gradient_terms_slow(self):
         """
-        NEEDS COMPLETING: Method to compute the two-electron integral gradient terms
+        OLD METHOD - SLOW, DELETE SOON
 
         Arguments
         ---------
@@ -702,7 +751,7 @@ class CQEDRHFCalculator:
             print(f"Time for One-electron gradient terms: {time.time() - t1:.3e} s")
 
             t2 = time.time()
-            self.compute_two_electron_integral_gradient_terms_2()
+            self.compute_two_electron_integral_gradient_terms()
             print(f"Time for Two-electron gradient terms: {time.time() - t2:.3e} s")
 
             t3 = time.time()
