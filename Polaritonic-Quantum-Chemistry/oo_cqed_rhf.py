@@ -65,6 +65,8 @@ class CQEDRHFCalculator:
                 self.potential_gradient +
                 self.J_gradient +
                 self.K_gradient +
+                self.o_dse_gradient +
+                self.K_dse_gradient +
                 self.nuclear_repulsion_gradient
             )
 
@@ -413,6 +415,10 @@ class CQEDRHFCalculator:
 
                 # compute gradient element
                 self.numerical_energy_gradient[i, j] = (energy_plus - energy_minus) / (2 * delta * ang_to_Bohr)
+
+        # restore original molecule string
+        self.molecule_string = original_molecule_string
+        self.calc_cqed_rhf_energy()
 
 
     def modify_geometry_string(self, geometry_string, displacement_array):
