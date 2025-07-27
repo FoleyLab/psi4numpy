@@ -26,6 +26,15 @@ class CQEDRHFCalculator:
         self.quadrupole_moment = None
         self.wfn = None
         self.qed_wfn = None
+        
+        # psi4_options dict has key "scf" the value of which will indicate if we should use density fitting or not
+        scf_flag = psi4_options.get("scf_type")
+        if scf_flag == "df":
+            self.density_fitting = True
+            print(F"Using Density Fitting!")
+        else:
+            print(F"Not Using Density Fitting!")
+            self.density_fitting = False
 
     def calc_force_and_energy(self, geometry_string, use_psi4_scf_grad=True):
         """
@@ -73,6 +82,89 @@ class CQEDRHFCalculator:
         # return a tuple of the energy and gradient
         return _qed_rhf_energy, _qed_rhf_grad
                              
+
+    def build_density_fitting_intermediates(self):
+        """
+        Build Ppq and Qso intermediates for density fitting builds of the J and K matrices
+        """
+        # need to know the orbital basis to choose the appropriate auxiliary basis
+        orbital_basis = self.psi4_options.get("basis")
+
+        # basis sets that are standard double zeta or dz + polarization that match with 
+        # the cc-pvdz-jkfit auxiliary basis set
+        double_zeta_list = ["6-31G", "6-31G*", "6-31G**", "6-31G*", "6-31G**", "cc-pVDZ"]
+
+        # triple zeta or tz + polarization that match with the cc-pvtz-jkfit auxiliary basis set
+        triple_zeta_list = ["6-311G", "6-311G*", "6-311G**", "cc-pVTZ"]
+
+        # double zeta with diffuse functions on heavy atoms that match with heavy-aug-cc-pvdz-jkfit
+        heavy_double_zeta_list = ["6-31+G", "6-31+G*", "6-31+G**", "6-31+G(d)", "6-31+G(d,p)"]
+
+        # double zeta with diffuse functions on all atoms that match with aug-cc-pvdz-jkfit
+        aug_double_zeta_list = ["6-31++G", "6-31++G*", "6-31++G**", "6-31++G(d)", "6-31+G(d,p)", "aug-cc-pVDZ"]
+
+        # triple zeta with diffuse functions on heavy atoms that match with heavy-aug-cc-pvtz-jkfit
+        heavy_triple_zeta_list = ["6-311+G", "6-311+G*", "6-311+G**"]
+
+        # triple zeta with diffuse functions on all atoms to match with aug-cc-pvtz-jkfit
+        aug_triple_zeta_list = ["6-311++G", "6-311++G*", "6-311++G**", "aug-cc-pVTZ"]
+
+        # make sure molecule object is defined
+        mol = psi4.geometry(self.molecule_string)
+        psi4.set_options(self.psi4_options)
+
+        # identify the auxiliary basis set
+        if orbital_basis == "sto-3g":
+            aux_basis = "def2-universal-jkfit"
+
+        elif orbital_basis in double_zeta_list:
+            aux_basis = "cc-pvdz-jkfit"
+
+        elif orbital_basis in aug_double_zeta_list:
+            aux_basis = "aug-cc-pvdz-jkfit"
+
+        elif orbital_basis in heavy_double_zeta_list:
+            aux_basis = "heavy-aug-cc-pvdz-jkfit"
+
+        elif orbital_basis in triple_zeta_list:
+            aux_basis = "cc-pvtz-jkfit" 
+        
+        elif orbital_basis in heavy_triple_zeta_list:
+            aux_basis = "heavy-aug-cc-pvtz-jkfit"
+
+        elif orbital_basis in aug_triple_zeta_list:
+            aux_basis = "aug-cc-pvtz-jkfit"
+
+        else:
+            print(F" You selected {orbital_basis}")
+            raise ValueError("This basis is not supported for density fitting yet.")
+        
+        # define the auxiliary basis set
+        _aux = psi4.core.BasisSet.build(mol, "DF_BASIS_SCF", aux_basis, "JKFIT", orbital_basis)
+
+        # get the standard basis set
+        _orb = self.psi4_wfn.basisset()
+
+        # get zero basis
+        _zero_bas = psi4.core.BasisSet.zero_ao_basis_set()
+
+        # Build instance of MintsHelper for DF 
+        _mints = psi4.core.MintsHelper(_orb)
+
+        # Build (P|pq) raw 3-index ERIs, dimension (1, Naux, nbf, nbf)
+        _Ppq = _mints.ao_eri(_aux, _zero_bas, _orb, _orb)
+
+        # Build & invert Coulomb metric, dimension (1, Naux, 1, Naux)
+        _metric = _mints.ao_eri(_aux, _zero_bas, _aux, _zero_bas)
+
+        _metric.power(-0.5, 1.e-14)
+
+        # Remove excess dimensions of Ppq, & metric
+        self.Ppq = np.squeeze(_Ppq)
+        self.metric = np.squeeze(_metric)
+
+        # Build the Qso object
+        self.Qpq = oe.contract('QP,Ppq->Qpq', self.metric, self.Ppq, optimize="optimal")
         
     
 
@@ -101,7 +193,16 @@ class CQEDRHFCalculator:
         # get standard integrals
         V = np.asarray(self.mints.ao_potential())
         T = np.asarray(self.mints.ao_kinetic())
-        I = np.asarray(self.mints.ao_eri())
+
+        if self.density_fitting:
+            # build the density fitting intermediates
+            self.build_density_fitting_intermediates()
+            # Qpq is the key object we need for the DF J and K matrices
+            Qpq = np.copy(self.Qpq)
+
+        else:
+            # standard two-electron integrals only if we need them
+            I = np.asarray(self.mints.ao_eri())
 
         # get nuclear dipole contributions
         mu_nuc_x = mol.nuclear_dipole()[0]
@@ -160,13 +261,33 @@ class CQEDRHFCalculator:
         D_conv = self.psi4_options.get("d_convergence", 1.0e-5)
 
         for scf_iter in range(1, maxiter + 1):
+                
+            if self.density_fitting:
+                # density fitting J and K contributions
+                # Two-step build of J with Qpq and D
+                start_jk = time.time()
+                X_Q = oe.contract('Qpq,pq->Q', Qpq, D, optimize="optimal")
+                J = oe.contract('Qpq,Q->pq', Qpq, X_Q, optimize="optimal")
+                
+                # Two-step build of K with Qpq and D
+                Z_Qqr = oe.contract('Qrs,sq->Qrq', Qpq, D, optimize="optimal")
+                K = oe.contract('Qpq,Qrq->pr', Qpq, Z_Qqr, optimize="optimal")
+                end_jk = time.time()
+                print(F" Time to construct J and K with DF is {end_jk-start_jk} s")
 
-            # canonical J and K contributions
-            J = oe.contract("pqrs,rs->pq", I, D, optimize="optimal")
-            K = oe.contract("prqs,rs->pq", I, D, optimize="optimal")
+
+            else:
+                # canonical J and K contributions
+                start_jk = time.time()
+                J = oe.contract("pqrs,rs->pq", I, D, optimize="optimal")
+                
+                K = oe.contract("prqs,rs->pq", I, D, optimize="optimal")
+                end_jk = time.time()
+                print(F" Time to construct J and K is {end_jk-start_jk} s")
             
             # K_dse contribution
             N = oe.contract("pr,qs,rs->pq", d_ao, d_ao, D, optimize="optimal")
+
 
             # updated Fock matrix
             F = H + 2 * J - K - N 
