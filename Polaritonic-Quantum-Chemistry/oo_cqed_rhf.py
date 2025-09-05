@@ -6,7 +6,7 @@ import opt_einsum as oe
 
 
 class CQEDRHFCalculator:
-    def __init__(self, lambda_vector, molecule_string, psi4_options):
+    def __init__(self, lambda_vector, molecule_string, psi4_options, omega = 0.1):
         self.lambda_vector = np.array(lambda_vector)
         self.molecule_string = molecule_string
         self.psi4_options = psi4_options
@@ -26,6 +26,7 @@ class CQEDRHFCalculator:
         self.quadrupole_moment = None
         self.wfn = None
         self.qed_wfn = None
+        self.omega = omega
         
         # psi4_options dict has key "scf" the value of which will indicate if we should use density fitting or not
         scf_flag = psi4_options.get("scf_type")
@@ -38,7 +39,7 @@ class CQEDRHFCalculator:
 
     def calc_force_and_energy(self, geometry_string, use_psi4_scf_grad=True):
         """
-        Calculate the force and energy using the CQED-RHF method.
+        Calculate the force, energy, and effective coupling using the CQED-RHF method.
         
         Args:
             geometry_string (str): The molecular geometry in Psi4 format.
@@ -51,6 +52,7 @@ class CQEDRHFCalculator:
         self.molecule_string = geometry_string
         self.calc_cqed_rhf_energy() # calculate the CQED-RHF energy at current geometry
         _qed_rhf_energy = self.cqed_rhf_energy
+        _coupling_strength = self.g
  
         # get the gradient 
         if use_psi4_scf_grad:
@@ -80,7 +82,7 @@ class CQEDRHFCalculator:
             )
 
         # return a tuple of the energy and gradient
-        return _qed_rhf_energy, _qed_rhf_grad
+        return _qed_rhf_energy, _qed_rhf_grad, _coupling_strength
                              
 
     def build_density_fitting_intermediates(self):
@@ -273,7 +275,7 @@ class CQEDRHFCalculator:
                 Z_Qqr = oe.contract('Qrs,sq->Qrq', Qpq, D, optimize="optimal")
                 K = oe.contract('Qpq,Qrq->pr', Qpq, Z_Qqr, optimize="optimal")
                 end_jk = time.time()
-                print(F" Time to construct J and K with DF is {end_jk-start_jk} s")
+                #print(F" Time to construct J and K with DF is {end_jk-start_jk} s")
 
 
             else:
@@ -283,7 +285,7 @@ class CQEDRHFCalculator:
                 
                 K = oe.contract("prqs,rs->pq", I, D, optimize="optimal")
                 end_jk = time.time()
-                print(F" Time to construct J and K is {end_jk-start_jk} s")
+                #print(F" Time to construct J and K is {end_jk-start_jk} s")
             
             # K_dse contribution
             N = oe.contract("pr,qs,rs->pq", d_ao, d_ao, D, optimize="optimal")
@@ -332,6 +334,7 @@ class CQEDRHFCalculator:
         self.d_exp_el = sum(self.lambda_vector[i] * mu_exp[i] for i in range(3)) # electronic part of <d>
         self.d_exp = self.d_exp_el + self.d_nuc # total <d>
 
+        
 
         self.dipole_energy = 0.5 * self.d_nuc**2 - self.d_nuc * self.d_exp_el + 0.5 * self.d_exp_el**2
 
@@ -352,6 +355,8 @@ class CQEDRHFCalculator:
         self.nuclear_dipole_moment = mu_nuc
         self.Q_PF = Q_PF
         self.d_ao = d_ao
+        # compute the effective coupling strength g = np.sqrt(omega / 2) * self.d_exp
+        self.g = np.sqrt(self.omega / 2) * self.d_exp
 
         # symmetrize the density matrix
         D = 0.5 * (self.density_matrix + oe.contract('rs->sr', self.density_matrix, optimize="optimal"))
