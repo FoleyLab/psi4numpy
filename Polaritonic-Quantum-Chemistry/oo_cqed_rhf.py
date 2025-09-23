@@ -4,6 +4,11 @@ import time
 import json
 import opt_einsum as oe
 
+class Subspace(list):
+    def append(self, item):
+        list.append(self, item)
+        if len(self) > dimSubspace:
+            del self[0]
 
 class CQEDRHFCalculator:
     def __init__(self, lambda_vector, molecule_string, psi4_options, omega = 0.1):
@@ -262,6 +267,13 @@ class CQEDRHFCalculator:
         E_conv = self.psi4_options.get("e_convergence", 1.0e-7)
         D_conv = self.psi4_options.get("d_convergence", 1.0e-5)
 
+        global dimSubspace
+        dimSubspace = 8
+        error_list = Subspace()
+        fock_list = Subspace()
+        # maxiter
+        maxiter = 500
+
         for scf_iter in range(1, maxiter + 1):
                 
             if self.density_fitting:
@@ -292,17 +304,36 @@ class CQEDRHFCalculator:
 
 
             # updated Fock matrix
-            F = H + 2 * J - K - N 
+            F = H + 2 * J - K - N
+            
+            # DIIS acceleration 
+            fock_list.append(F)
+            diis_e = np.einsum("ij,jk,kl->il", F, D, S) - np.einsum(
+                "ij,jk,kl->il", S, D, F
+            )
+            # turn diis_e into column vector and then save to memory
+            error_vector = diis_e.reshape(diis_e.shape[0] * diis_e.shape[0], 1)
+            error_list.append(error_vector)
 
-            diis_e = A @ (F @ D @ S - S @ D @ F) @ A
-            dRMS = np.sqrt(np.mean(diis_e**2))
+            diis_e = A.dot(diis_e).dot(A)
+            dRMS = np.mean(diis_e**2) ** 0.5
+
 
             # current QED-RHF energy, note D is only Da so we are performing einsum over (F+H) D
             E_scf = oe.contract("pq,pq->", F + H, D, optimize="optimal") + Enuc 
 
-            if abs(E_scf - Eold) < E_conv and dRMS < D_conv:
+            print(f" SCF Iteration {scf_iter:3d}:  E = {E_scf:16.10f}  dE = {E_scf - Eold: 12.8e}  dRMS = {dRMS: 12.8e}")
+
+            if abs(E_scf - Eold) < E_conv and (dRMS < D_conv):
                 break
             Eold = E_scf
+
+            if scf_iter >= 2:
+                diis_coeff = self.compute_b_coefficients(error_list)
+                F = np.zeros_like(F)
+                for i in range(len(fock_list)):
+                    F += diis_coeff[i] * fock_list[i]
+
 
             Fp = A @ F @ A
             e, C2 = np.linalg.eigh(Fp)
@@ -960,3 +991,18 @@ class CQEDRHFCalculator:
         }
         with open(filename, 'w') as f:
             json.dump(data, f, indent=4)
+
+    def compute_b_coefficients(self, error_vectors):
+        """ Compute the DIIS B matrix and solve for the coefficients."""
+        b_mat = np.zeros((len(error_vectors) + 1, len(error_vectors) + 1))
+        b_mat[-1, :] = -1
+        b_mat[:, -1] = -1
+        b_mat[-1, -1] = 0
+        rhs = np.zeros((len(error_vectors) + 1, 1))
+        rhs[-1, -1] = -1
+        for i in range(len(error_vectors)):
+            for j in range(i + 1):
+                b_mat[i, j] = np.dot(error_vectors[i].transpose(), error_vectors[j])
+                b_mat[j, i] = b_mat[i, j]
+        *diis_coeff, _ = np.linalg.solve(b_mat, rhs)
+        return diis_coeff
